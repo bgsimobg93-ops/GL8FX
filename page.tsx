@@ -11,6 +11,7 @@ import {
   FileText,
   Video,
   Building2,
+  Code2,
 } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -93,10 +94,12 @@ export default function GL8FXTrainingPortal() {
   ];
 
   const resources = [
-    { name: "GL8FX Master Presentation", type: "PDF / Slides" },
-    { name: "Investor Call Flow", type: "Script" },
-    { name: "GTC Partnership Summary", type: "Document" },
-    { name: "Meeting Objection Handling", type: "Guide" },
+    { name: "GL8FX Master Presentation", type: "PDF / Slides", href: null },
+    { name: "Investor Call Flow", type: "Script", href: null },
+    { name: "GTC Partnership Summary", type: "Document", href: null },
+    { name: "Meeting Objection Handling", type: "Guide", href: null },
+    { name: "Gold EMA 50/200 CFD Bot v2.5", type: "MT5 Expert Advisor (.mq5)", href: "/bots/Gold_EMA_50_200_CFD_Bot.mq5" },
+    { name: "VWAP Trend CFD Bot v4.0", type: "MT5 Expert Advisor (.mq5)", href: "/bots/VWAP_Trend_CFD_v4.mq5" },
   ];
 
   const filteredModules = useMemo(() => {
@@ -337,11 +340,24 @@ export default function GL8FXTrainingPortal() {
             {resources.map((resource) => (
               <div key={resource.name} className="rounded-2xl border border-slate-200 bg-white/80 p-5 backdrop-blur">
                 <div className="flex items-center gap-3">
-                  {resource.type.includes("PDF") ? <FileText className="h-5 w-5" /> : <Video className="h-5 w-5" />}
-                  <div>
+                  {resource.type.includes("PDF") || resource.type.includes("Script") || resource.type.includes("Document") || resource.type.includes("Guide")
+                    ? <FileText className="h-5 w-5" />
+                    : resource.type.includes("MT5")
+                    ? <Code2 className="h-5 w-5" />
+                    : <Video className="h-5 w-5" />}
+                  <div className="flex-1 min-w-0">
                     <div className="font-semibold">{resource.name}</div>
                     <div className="text-sm text-slate-500">{resource.type}</div>
                   </div>
+                  {resource.href && (
+                    <a
+                      href={resource.href}
+                      download
+                      className="shrink-0 rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-85"
+                    >
+                      Download
+                    </a>
+                  )}
                 </div>
               </div>
             ))}
