@@ -99,11 +99,8 @@ void OnTick()
    if(ManageOpenPosition(closePrices[1], fastEma[1], slowEma[1]))
       return;
 
-   // Само лонг crossover
-   bool crossedAbove = closePrices[2] <= MathMax(fastEma[2], slowEma[2]) &&
-                       closePrices[1] >  MathMax(fastEma[1], slowEma[1]);
-
-   if(crossedAbove)
+   // Влиза когато кендъл затвори над ДВЕТЕ EMA (без отворена позиция)
+   if(closePrices[1] > MathMax(fastEma[1], slowEma[1]))
       OpenLong();
 }
 
