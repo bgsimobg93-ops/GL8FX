@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { motion } from "framer-motion";
 
 const fade = (delay = 0) => ({
@@ -110,8 +111,32 @@ const GRID_OVERLAY = {
 };
 
 export default function SimeonReport() {
+  const [loading, setLoading] = useState(false);
+
+  const handleDownload = async () => {
+    setLoading(true);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const html2pdf = (await import("html2pdf.js" as any)).default;
+      const element = document.getElementById("report-content");
+      await html2pdf()
+        .set({
+          margin: 0,
+          filename: "simeon-natev-fabervaale-orb-report.pdf",
+          image: { type: "jpeg", quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true, backgroundColor: "#000008" },
+          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        })
+        .from(element)
+        .save();
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div
+      id="report-content"
       className="min-h-screen bg-[#000008] text-white"
       style={{ fontFamily: "'Helvetica Neue', Arial, sans-serif" }}
     >
@@ -1217,6 +1242,38 @@ if CurrentBar >= 2 then begin
 end;`}</pre>
         </div>
       </section>
+
+      {/* ───────────── FLOATING DOWNLOAD BUTTON ───────────── */}
+      <button
+        onClick={handleDownload}
+        disabled={loading}
+        className="fixed bottom-8 right-8 z-50 flex items-center gap-3 px-6 py-3 text-sm font-bold tracking-[0.15em] uppercase transition-all hover:scale-[1.04] disabled:opacity-60 disabled:cursor-not-allowed"
+        style={{
+          background: loading
+            ? "linear-gradient(135deg, #1e3a8a, #1d4ed8)"
+            : "linear-gradient(135deg, #1d4ed8, #3b82f6, #60a5fa)",
+          border: "1px solid rgba(96,165,250,0.4)",
+          boxShadow: "0 0 32px rgba(59,130,246,0.35), 0 4px 20px rgba(0,0,0,0.5)",
+          color: "#fff",
+        }}
+      >
+        {loading ? (
+          <>
+            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+            </svg>
+            Generating…
+          </>
+        ) : (
+          <>
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 4v11" />
+            </svg>
+            Download PDF
+          </>
+        )}
+      </button>
 
       {/* ───────────── FOOTER ───────────── */}
       <footer
