@@ -11,10 +11,13 @@ import uuid
 from datetime import datetime
 from typing import AsyncIterator
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+load_dotenv()
 
 # ── point Python at the cloned tradingagents-core ──────────────────────────
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
