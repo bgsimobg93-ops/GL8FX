@@ -37,34 +37,123 @@ function StatusDot({ status }: { status: Job["status"] }) {
   return <span className={`inline-block w-2 h-2 rounded-full ${colors[status]}`} />;
 }
 
-function DecisionCard({ decision }: { decision: Record<string, unknown> }) {
-  const action = String(decision.action ?? decision.decision ?? decision.raw ?? "—").toUpperCase();
-  const isBuy  = action.includes("BUY") || action.includes("LONG");
-  const isSell = action.includes("SELL") || action.includes("SHORT");
+const SKIP_KEYS = new Set(["action","decision","raw","reasoning","rationale","analysis","reason","summary","confidence","risk","entry_price","entry","buy_price","sell_price","target_price","stop_loss","stop","take_profit","target"]);
 
-  const color = isBuy
-    ? "border-emerald-500/50 bg-emerald-950/20 text-emerald-300"
-    : isSell
-    ? "border-red-500/50 bg-red-950/20 text-red-300"
-    : "border-blue-500/30 bg-blue-950/20 text-blue-200";
+function parseAction(decision: Record<string, unknown>): "BUY" | "SELL" | "RANGE" {
+  const raw = String(decision.action ?? decision.decision ?? decision.raw ?? "").toUpperCase();
+  if (raw.includes("BUY") || raw.includes("LONG"))   return "BUY";
+  if (raw.includes("SELL") || raw.includes("SHORT")) return "SELL";
+  return "RANGE";
+}
+
+function ActionBadge({ action }: { action: "BUY" | "SELL" | "RANGE" }) {
+  const styles = {
+    BUY:   "border-emerald-500/60 bg-emerald-950/30 text-emerald-300 shadow-emerald-900/40",
+    SELL:  "border-red-500/60 bg-red-950/30 text-red-300 shadow-red-900/40",
+    RANGE: "border-blue-500/40 bg-blue-950/30 text-blue-300 shadow-blue-900/40",
+  };
+  const icons = { BUY: "▲", SELL: "▼", RANGE: "◆" };
+  return (
+    <div className={`border p-6 text-center shadow-lg ${styles[action]}`}>
+      <p className="text-[9px] tracking-[0.45em] uppercase opacity-50 mb-2">// Signal</p>
+      <p className="text-5xl font-black tracking-wider mb-1">{icons[action]} {action}</p>
+      {action === "RANGE" && (
+        <p className="text-[10px] tracking-widest uppercase opacity-40 mt-1">Consolidation / No Clear Edge</p>
+      )}
+    </div>
+  );
+}
+
+function DecisionCard({ decision, ticker }: { decision: Record<string, unknown>; ticker: string }) {
+  const action = parseAction(decision);
+
+  const reasoning = String(
+    decision.reasoning ?? decision.rationale ?? decision.analysis ??
+    decision.reason ?? decision.summary ?? ""
+  ).trim();
+
+  const confidence = decision.confidence ? String(decision.confidence) : null;
+  const risk       = decision.risk       ? String(decision.risk)       : null;
+
+  const entry   = decision.entry_price  ?? decision.entry  ?? decision.buy_price  ?? decision.sell_price  ?? null;
+  const stop    = decision.stop_loss    ?? decision.stop   ?? null;
+  const target  = decision.take_profit  ?? decision.target ?? decision.target_price ?? null;
+
+  const extras = Object.entries(decision).filter(([k]) => !SKIP_KEYS.has(k));
 
   return (
     <div className="space-y-4">
-      <div className={`border ${color} p-6 text-center`}>
-        <p className="text-[9px] tracking-[0.35em] uppercase mb-2 opacity-60">Final Decision</p>
-        <p className="text-3xl font-black">{action}</p>
-      </div>
+      {/* Signal */}
+      <ActionBadge action={action} />
 
-      {Object.entries(decision)
-        .filter(([k]) => !["action", "decision", "raw"].includes(k))
-        .map(([k, v]) => (
-          <div key={k} className="border border-blue-900/30 bg-blue-950/15 p-4">
-            <p className="text-[9px] tracking-[0.3em] uppercase text-blue-400/55 mb-1">{k}</p>
-            <p className="text-sm text-blue-100/70 leading-relaxed whitespace-pre-wrap">
-              {typeof v === "object" ? JSON.stringify(v, null, 2) : String(v)}
-            </p>
+      {/* Meta row */}
+      {(confidence || risk) && (
+        <div className="grid grid-cols-2 gap-3">
+          {confidence && (
+            <div className="border border-blue-900/35 bg-blue-950/15 p-4 text-center">
+              <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/50 mb-1">Confidence</p>
+              <p className="text-lg font-bold text-white">{confidence}</p>
+            </div>
+          )}
+          {risk && (
+            <div className="border border-blue-900/35 bg-blue-950/15 p-4 text-center">
+              <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/50 mb-1">Risk</p>
+              <p className="text-lg font-bold text-white">{risk}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Entry / Stop / Target */}
+      {(entry || stop || target) && (
+        <div className="border border-blue-900/35 bg-blue-950/15 p-5">
+          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/55 mb-4">// Entry Points</p>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            {entry && (
+              <div>
+                <p className="text-[9px] tracking-widest uppercase text-emerald-400/50 mb-1">Entry</p>
+                <p className="text-sm font-bold text-emerald-300">{String(entry)}</p>
+              </div>
+            )}
+            {stop && (
+              <div>
+                <p className="text-[9px] tracking-widest uppercase text-red-400/50 mb-1">Stop Loss</p>
+                <p className="text-sm font-bold text-red-300">{String(stop)}</p>
+              </div>
+            )}
+            {target && (
+              <div>
+                <p className="text-[9px] tracking-widest uppercase text-blue-400/50 mb-1">Target</p>
+                <p className="text-sm font-bold text-blue-300">{String(target)}</p>
+              </div>
+            )}
           </div>
-        ))}
+        </div>
+      )}
+
+      {/* Reasoning */}
+      {reasoning && (
+        <div className="border border-blue-900/35 bg-blue-950/15 p-5">
+          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/55 mb-3">// Analysis & Reasoning</p>
+          <div className="space-y-2">
+            {reasoning.split(/\n+/).map((para, i) => (
+              <p key={i} className="text-sm text-blue-100/75 leading-relaxed">{para}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Extra fields */}
+      {extras.map(([k, v]) => (
+        <div key={k} className="border border-blue-900/25 bg-blue-950/10 p-4">
+          <p className="text-[9px] tracking-[0.3em] uppercase text-blue-400/45 mb-1">
+            {k.replace(/_/g, " ")}
+          </p>
+          <p className="text-sm text-blue-100/65 leading-relaxed whitespace-pre-wrap">
+            {typeof v === "object" ? JSON.stringify(v, null, 2) : String(v)}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -378,7 +467,7 @@ export default function AgentsPage() {
 
                 {/* Decision */}
                 {job.status === "done" && job.decision && (
-                  <DecisionCard decision={job.decision} />
+                  <DecisionCard decision={job.decision} ticker={job.ticker} />
                 )}
 
                 {/* Error */}
@@ -398,20 +487,27 @@ export default function AgentsPage() {
             <div className="border border-blue-900/25 bg-blue-950/10 p-5">
               <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/45 mb-4">// Previous Analyses</p>
               <div className="space-y-2">
-                {history.map(h => (
-                  <button
-                    key={h.job_id}
-                    onClick={() => setJob(h)}
-                    className="w-full flex items-center justify-between px-4 py-3 border border-blue-900/20 bg-transparent hover:border-blue-700/35 text-left transition-all"
-                  >
-                    <div className="flex items-center gap-2">
-                      <StatusDot status={h.status} />
-                      <span className="text-sm font-bold">{h.ticker}</span>
-                      <span className="text-xs text-blue-400/40">{h.date}</span>
-                    </div>
-                    <span className="text-[9px] tracking-widest uppercase text-blue-400/35">{h.status}</span>
-                  </button>
-                ))}
+                {history.map(h => {
+                  const act = h.decision ? parseAction(h.decision) : null;
+                  const actColor = act === "BUY" ? "text-emerald-400" : act === "SELL" ? "text-red-400" : "text-blue-400";
+                  return (
+                    <button
+                      key={h.job_id}
+                      onClick={() => setJob(h)}
+                      className="w-full flex items-center justify-between px-4 py-3 border border-blue-900/20 bg-transparent hover:border-blue-700/35 text-left transition-all"
+                    >
+                      <div className="flex items-center gap-2">
+                        <StatusDot status={h.status} />
+                        <span className="text-sm font-bold">{h.ticker}</span>
+                        <span className="text-xs text-blue-400/40">{h.date}</span>
+                      </div>
+                      {act
+                        ? <span className={`text-xs font-bold tracking-widest ${actColor}`}>{act}</span>
+                        : <span className="text-[9px] tracking-widest uppercase text-blue-400/35">{h.status}</span>
+                      }
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
