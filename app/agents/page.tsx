@@ -194,6 +194,80 @@ function DecisionCard({ decision, ticker }: { decision: Record<string, unknown>;
           ))}
         </div>
       )}
+
+      {/* ── Per-agent breakdown ── */}
+      <AgentReports decision={decision} />
+    </div>
+  );
+}
+
+function ReportBlock({ label, text, accent }: { label: string; text: string; accent?: string }) {
+  if (!text) return null;
+  return (
+    <div className={`border ${accent ?? "border-blue-900/25"} bg-blue-950/10 p-5`}>
+      <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/45 mb-3">{label}</p>
+      <div className="space-y-2">
+        {text.split(/\n+/).filter(l => l.trim()).map((line, i) => (
+          <p key={i} className="text-sm text-blue-100/70 leading-relaxed">{line.trim()}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DebateBlock({ bullText, bearText, judge }: { bullText: string; bearText: string; judge: string }) {
+  if (!bullText && !bearText && !judge) return null;
+  return (
+    <div className="border border-blue-900/25 bg-blue-950/10 p-5 space-y-4">
+      <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/45">// Investment Debate</p>
+      {bullText && (
+        <div className="border-l-2 border-emerald-500/40 pl-4">
+          <p className="text-[9px] tracking-widest uppercase text-emerald-400/55 mb-2">Bull Case</p>
+          <p className="text-sm text-blue-100/65 leading-relaxed line-clamp-6">{bullText}</p>
+        </div>
+      )}
+      {bearText && (
+        <div className="border-l-2 border-red-500/40 pl-4">
+          <p className="text-[9px] tracking-widest uppercase text-red-400/55 mb-2">Bear Case</p>
+          <p className="text-sm text-blue-100/65 leading-relaxed line-clamp-6">{bearText}</p>
+        </div>
+      )}
+      {judge && (
+        <div className="border-l-2 border-blue-400/40 pl-4">
+          <p className="text-[9px] tracking-widest uppercase text-blue-400/55 mb-2">Judge Decision</p>
+          <p className="text-sm text-blue-100/65 leading-relaxed">{judge}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentReports({ decision }: { decision: Record<string, unknown> }) {
+  const market       = String(decision["_market_report"]       ?? "").trim();
+  const sentiment    = String(decision["_sentiment_report"]    ?? "").trim();
+  const news         = String(decision["_news_report"]         ?? "").trim();
+  const fundamentals = String(decision["_fundamentals_report"] ?? "").trim();
+  const plan         = String(decision["_investment_plan"]     ?? "").trim();
+  const finalRaw     = String(decision["_final_raw"]           ?? "").trim();
+  const bull         = String(decision["_bull_case"]           ?? "").trim();
+  const bear         = String(decision["_bear_case"]           ?? "").trim();
+  const judge        = String(decision["_judge"]               ?? "").trim();
+  const riskJudge    = String(decision["_risk_judge"]          ?? "").trim();
+
+  const hasAny = [market, sentiment, news, fundamentals, plan, finalRaw, bull, bear, judge, riskJudge].some(s => s.length > 0);
+  if (!hasAny) return null;
+
+  return (
+    <div className="space-y-3 pt-2">
+      <p className="text-[9px] tracking-[0.45em] uppercase text-blue-400/35">── Agent Reports ──────────────────</p>
+      <ReportBlock label="// Market Analyst"       text={market}       accent="border-blue-800/30" />
+      <ReportBlock label="// Fundamentals Analyst" text={fundamentals} accent="border-blue-800/30" />
+      <ReportBlock label="// News Analyst"         text={news}         accent="border-blue-800/30" />
+      <ReportBlock label="// Social Sentiment"     text={sentiment}    accent="border-blue-800/30" />
+      <DebateBlock bullText={bull} bearText={bear} judge={judge} />
+      <ReportBlock label="// Risk Assessment"      text={riskJudge}    accent="border-amber-900/30" />
+      <ReportBlock label="// Investment Plan"      text={plan}         accent="border-blue-800/30" />
+      {finalRaw && <ReportBlock label="// Final Decision (Raw)" text={finalRaw} accent="border-blue-700/30" />}
     </div>
   );
 }

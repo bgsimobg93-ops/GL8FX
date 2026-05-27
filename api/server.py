@@ -79,13 +79,32 @@ def _run_analysis(job_id: str, req: AnalyzeRequest) -> None:
             debug=False,
             config=cfg,
         )
-        _, decision = ta.propagate(req.ticker, req.date, req.asset_type)
+        final_state, decision = ta.propagate(req.ticker, req.date, req.asset_type)
 
         # normalise decision to a plain dict
         if hasattr(decision, "model_dump"):
             decision = decision.model_dump()
         elif not isinstance(decision, dict):
             decision = {"raw": str(decision)}
+
+        # attach per-agent reports from full state
+        def _txt(v):
+            return str(v).strip() if v else ""
+
+        decision["_market_report"]       = _txt(final_state.get("market_report"))
+        decision["_sentiment_report"]    = _txt(final_state.get("sentiment_report"))
+        decision["_news_report"]         = _txt(final_state.get("news_report"))
+        decision["_fundamentals_report"] = _txt(final_state.get("fundamentals_report"))
+        decision["_investment_plan"]     = _txt(final_state.get("investment_plan") or final_state.get("trader_investment_plan"))
+        decision["_final_raw"]           = _txt(final_state.get("final_trade_decision"))
+
+        inv = final_state.get("investment_debate_state") or {}
+        decision["_bull_case"]  = _txt(inv.get("bull_history") or inv.get("current_response"))
+        decision["_bear_case"]  = _txt(inv.get("bear_history"))
+        decision["_judge"]      = _txt(inv.get("judge_decision"))
+
+        risk = final_state.get("risk_debate_state") or {}
+        decision["_risk_judge"] = _txt(risk.get("judge_decision"))
 
         _jobs[job_id]["status"]      = "done"
         _jobs[job_id]["decision"]    = decision
