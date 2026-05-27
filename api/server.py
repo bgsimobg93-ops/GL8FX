@@ -6,6 +6,7 @@ Run: uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 import asyncio
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime
@@ -24,7 +25,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tradingagents-core"))
 
 # allow futures tickers like NQ=F before TradingAgents imports its regex
-import re
 import tradingagents.dataflows.utils as _ta_utils
 _ta_utils._TICKER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-\^=]+$")
 
@@ -42,6 +42,68 @@ app.add_middleware(
 
 # ── in-memory job store ─────────────────────────────────────────────────────
 _jobs: dict[str, dict] = {}
+
+_BRIEF_PROMPT = """You are a concise trading analyst. Extract a structured brief from the analysis below.
+Return ONLY valid JSON — no markdown, no extra text.
+
+{{
+  "action": "BUY or SELL or RANGE",
+  "support_levels": ["up to 2 specific price levels as strings, e.g. '3,200' or '19,450'"],
+  "resistance_levels": ["up to 2 specific price levels as strings"],
+  "entry": "specific price or null",
+  "stop_loss": "specific price or null",
+  "target": "specific price or null",
+  "bull_points": ["exactly 3 items, each under 10 words, no filler"],
+  "bear_points": ["exactly 3 items, each under 10 words, no filler"],
+  "verdict": "1 sentence max 25 words explaining the final recommendation"
+}}
+
+Analysis for {ticker}:
+{text}"""
+
+
+def _call_llm(prompt: str, provider: str, model: str) -> str:
+    if provider == "openai":
+        from openai import OpenAI
+        r = OpenAI().chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        return r.choices[0].message.content or ""
+    if provider == "anthropic":
+        import anthropic
+        r = anthropic.Anthropic().messages.create(
+            model=model, max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return r.content[0].text
+    if provider in ("google", "gemini"):
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY", ""))
+        return genai.GenerativeModel(model).generate_content(prompt).text
+    return ""
+
+
+def _summarize(decision: dict, ticker: str, provider: str, model: str) -> None:
+    text = "\n\n".join(filter(None, [
+        decision.get("_market_report", ""),
+        decision.get("_bull_case", ""),
+        decision.get("_bear_case", ""),
+        decision.get("_judge", ""),
+        decision.get("_final_raw", ""),
+    ]))[:4000]
+    if not text.strip():
+        return
+    try:
+        prompt = _BRIEF_PROMPT.format(ticker=ticker, text=text)
+        raw = _call_llm(prompt, provider, model)
+        # extract JSON block if wrapped in markdown
+        m = re.search(r"\{[\s\S]+\}", raw)
+        if m:
+            decision["_brief"] = json.loads(m.group())
+    except Exception:
+        pass
 
 
 class AnalyzeRequest(BaseModel):
@@ -86,13 +148,11 @@ def _run_analysis(job_id: str, req: AnalyzeRequest) -> None:
         )
         final_state, decision = ta.propagate(req.ticker, req.date, req.asset_type)
 
-        # normalise decision to a plain dict
         if hasattr(decision, "model_dump"):
             decision = decision.model_dump()
         elif not isinstance(decision, dict):
             decision = {"raw": str(decision)}
 
-        # attach per-agent reports from full state
         def _txt(v):
             return str(v).strip() if v else ""
 
@@ -110,6 +170,9 @@ def _run_analysis(job_id: str, req: AnalyzeRequest) -> None:
 
         risk = final_state.get("risk_debate_state") or {}
         decision["_risk_judge"] = _txt(risk.get("judge_decision"))
+
+        # structured brief via LLM
+        _summarize(decision, req.ticker, req.llm_provider, req.quick_think_llm)
 
         _jobs[job_id]["status"]      = "done"
         _jobs[job_id]["decision"]    = decision
@@ -140,7 +203,6 @@ async def analyze(req: AnalyzeRequest):
         "started_at":  None,
         "finished_at": None,
     }
-    # run in background thread — doesn't block the event loop
     asyncio.get_event_loop().run_in_executor(
         None, _run_analysis, job_id, req
     )
@@ -160,7 +222,6 @@ def list_jobs():
 
 
 async def _stream_job(job_id: str) -> AsyncIterator[str]:
-    """SSE generator — polls every second until done/error."""
     while True:
         job = _jobs.get(job_id)
         if not job:
@@ -174,9 +235,9 @@ async def _stream_job(job_id: str) -> AsyncIterator[str]:
 
 @app.get("/stream/{job_id}")
 async def stream_job(job_id: str):
-    """Server-Sent Events endpoint — subscribe to live job updates."""
     return StreamingResponse(
         _stream_job(job_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+

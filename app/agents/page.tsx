@@ -50,26 +50,33 @@ function parseAction(decision: Record<string, unknown>): "BUY" | "SELL" | "RANGE
 
 function extractBullets(text: string, max = 3): string[] {
   if (!text) return [];
-  // strip analyst intro lines ("Bull Analyst: Absolutely..." / "Bear Analyst: ...")
+
+  // clean markdown and analyst prefixes
   const cleaned = text
     .replace(/^(Bull|Bear|Risk|Market|News|Social|Fundamentals)\s+Analyst\s*:\s*/gim, "")
-    .replace(/^(Alright|Absolutely|Thank[s]?|Let['']s|Let me|Sure)[^.\n]*[.\n]/gim, "")
-    .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")  // strip markdown bold
-    .replace(/#{1,4}\s*/g, "");                // strip markdown headers
+    .replace(/\*{1,2}([^*\n]+)\*{1,2}/g, "$1")
+    .replace(/`([^`]+)`/g, "$1");
 
-  // prefer numbered lists
-  const numbered = [...cleaned.matchAll(/(?:^|\n)\s*\d+[.)]\s+([^\n]{15,})/gm)].map(m => m[1].trim());
-  if (numbered.length >= 2) return numbered.filter(s => s.length > 10).slice(0, max);
+  // numbered lists: "1. xxx" or "1) xxx"
+  const numbered = [...cleaned.matchAll(/(?:^|\n)\s*\d+[.)]\s+([^\n]{20,})/gm)].map(m => m[1].trim());
+  if (numbered.length >= 2) return numbered.filter(s => !/^(alright|absolutely|let'?s|thank|sure|this report)/i.test(s)).slice(0, max);
 
-  // dash/bullet lists
-  const dashed = [...cleaned.matchAll(/(?:^|\n)\s*[-•]\s+([^\n]{15,})/gm)].map(m => m[1].trim());
-  if (dashed.length >= 2) return dashed.filter(s => s.length > 10).slice(0, max);
+  // dash bullet: "- xxx" or "• xxx"
+  const dashed = [...cleaned.matchAll(/(?:^|\n)\s*[-•]\s+([^\n]{20,})/gm)].map(m => m[1].trim());
+  if (dashed.length >= 2) return dashed.filter(s => !/^(alright|absolutely|let'?s|thank|sure)/i.test(s)).slice(0, max);
 
-  // fall back: meaningful sentences, skip filler openers
-  const fillers = /^(This|That|While|Although|However|In summary|In conclusion|Overall|Given|Based)/i;
-  return cleaned.split(/(?<=[.!?])\s+/)
+  // section-based: grab first sentence after "---" or "###" section headers
+  const sections = cleaned.split(/(?:^|\n)\s*(?:---+|#{1,4})\s*[^\n]+/m);
+  const fromSections = sections
+    .map(sec => sec.trim().split(/(?<=[.!?])\s+/).find(s => s.length > 25) ?? "")
+    .filter(s => s.length > 25 && !/^(alright|absolutely|let'?s|thank|in (summary|conclusion))/i.test(s));
+  if (fromSections.length >= 2) return fromSections.slice(0, max);
+
+  // fallback: meaningful sentences
+  return cleaned
+    .split(/(?<=[.!?])\s+/)
     .map(s => s.trim())
-    .filter(s => s.length > 30 && !fillers.test(s))
+    .filter(s => s.length > 30 && !/^(alright|absolutely|let'?s|thank|in (summary|conclusion)|this report|while i|i believe)/i.test(s))
     .slice(0, max);
 }
 
@@ -115,7 +122,13 @@ function extractPrices(text: string): string[] {
 }
 
 function DecisionCard({ decision, ticker }: { decision: Record<string, unknown>; ticker: string }) {
-  const action = parseAction(decision);
+  // prefer LLM-structured brief when available
+  const brief = decision["_brief"] as Record<string, unknown> | undefined;
+
+  const action = brief
+    ? (String(brief.action ?? "RANGE").toUpperCase().includes("BUY") ? "BUY"
+      : String(brief.action ?? "").toUpperCase().includes("SELL") ? "SELL" : "RANGE")
+    : parseAction(decision);
 
   const cfg = {
     BUY:   { border: "border-emerald-500/60", bg: "bg-emerald-950/25", text: "text-emerald-300", icon: "▲" },
@@ -123,27 +136,26 @@ function DecisionCard({ decision, ticker }: { decision: Record<string, unknown>;
     RANGE: { border: "border-blue-500/35",    bg: "bg-blue-950/20",    text: "text-blue-300",    icon: "◆" },
   }[action];
 
-  const entry  = decision.entry_price ?? decision.entry  ?? decision.buy_price ?? decision.sell_price ?? null;
-  const stop   = decision.stop_loss   ?? decision.stop   ?? null;
-  const target = decision.take_profit ?? decision.target ?? decision.target_price ?? null;
+  const entry   = brief?.entry    as string | null ?? (decision.entry_price ?? decision.entry ?? null) as string | null;
+  const stop    = brief?.stop_loss as string | null ?? (decision.stop_loss  ?? decision.stop  ?? null) as string | null;
+  const target  = brief?.target   as string | null ?? (decision.take_profit ?? decision.target ?? null) as string | null;
 
   const allText = [
     decision["_market_report"], decision["_fundamentals_report"],
     decision["_news_report"],   decision["_sentiment_report"],
   ].map(v => String(v ?? "")).join("\n");
 
-  const { supports, resistances } = extractLevels(allText);
+  const supports    = brief ? (brief.support_levels    as string[] ?? []) : extractLevels(allText).supports;
+  const resistances = brief ? (brief.resistance_levels as string[] ?? []) : extractLevels(allText).resistances;
 
-  const bull      = String(decision["_bull_case"] ?? "");
-  const bear      = String(decision["_bear_case"] ?? "");
-  const judge     = String(decision["_judge"]     ?? decision["_final_raw"] ?? decision["_risk_judge"] ?? "");
-  const bullPts   = extractBullets(bull);
-  const bearPts   = extractBullets(bear);
-  const verdict   = firstSentences(judge, 2);
+  const bull    = String(decision["_bull_case"] ?? "");
+  const bear    = String(decision["_bear_case"] ?? "");
+  const judge   = String(decision["_judge"]     ?? decision["_final_raw"] ?? decision["_risk_judge"] ?? "");
+  const bullPts = brief ? (brief.bull_points as string[] ?? []) : extractBullets(bull);
+  const bearPts = brief ? (brief.bear_points as string[] ?? []) : extractBullets(bear);
+  const verdict = brief ? String(brief.verdict ?? "") : firstSentences(judge, 2);
 
-  // extract price mentions from all agent text
-  const priceText = [allText, bull, bear, judge].join("\n");
-  const mentionedPrices = extractPrices(priceText);
+  const mentionedPrices: string[] = [];  // only used as fallback when no brief
 
   return (
     <div className="space-y-3">
