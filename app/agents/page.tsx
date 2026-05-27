@@ -50,11 +50,27 @@ function parseAction(decision: Record<string, unknown>): "BUY" | "SELL" | "RANGE
 
 function extractBullets(text: string, max = 3): string[] {
   if (!text) return [];
-  const numbered = [...text.matchAll(/(?:^|\n)\s*\d+\.\s+\*{0,2}([^\n*]+)\*{0,2}/gm)].map(m => m[1].trim());
+  // strip analyst intro lines ("Bull Analyst: Absolutely..." / "Bear Analyst: ...")
+  const cleaned = text
+    .replace(/^(Bull|Bear|Risk|Market|News|Social|Fundamentals)\s+Analyst\s*:\s*/gim, "")
+    .replace(/^(Alright|Absolutely|Thank[s]?|Let['']s|Let me|Sure)[^.\n]*[.\n]/gim, "")
+    .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")  // strip markdown bold
+    .replace(/#{1,4}\s*/g, "");                // strip markdown headers
+
+  // prefer numbered lists
+  const numbered = [...cleaned.matchAll(/(?:^|\n)\s*\d+[.)]\s+([^\n]{15,})/gm)].map(m => m[1].trim());
   if (numbered.length >= 2) return numbered.filter(s => s.length > 10).slice(0, max);
-  const dashed = [...text.matchAll(/(?:^|\n)\s*[-•]\s+\*{0,2}([^\n*]+)\*{0,2}/gm)].map(m => m[1].trim());
+
+  // dash/bullet lists
+  const dashed = [...cleaned.matchAll(/(?:^|\n)\s*[-•]\s+([^\n]{15,})/gm)].map(m => m[1].trim());
   if (dashed.length >= 2) return dashed.filter(s => s.length > 10).slice(0, max);
-  return text.split(/[.!?]\s+/).map(s => s.trim()).filter(s => s.length > 25 && !s.startsWith("#")).slice(0, max);
+
+  // fall back: meaningful sentences, skip filler openers
+  const fillers = /^(This|That|While|Although|However|In summary|In conclusion|Overall|Given|Based)/i;
+  return cleaned.split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 30 && !fillers.test(s))
+    .slice(0, max);
 }
 
 function extractLevels(text: string): { supports: string[]; resistances: string[] } {
@@ -75,7 +91,27 @@ function extractLevels(text: string): { supports: string[]; resistances: string[
 }
 
 function firstSentences(text: string, n = 2): string {
-  return text.split(/(?<=[.!?])\s+/).slice(0, n).join(" ").replace(/#+\s*/g, "").replace(/\*\*/g, "").trim();
+  return text
+    .replace(/\*\*/g, "").replace(/#{1,4}\s*/g, "")
+    .replace(/\*\*Rationale\*\*:?|Rationale:?/gi, "")
+    .replace(/\*\*Recommendation\*\*:?\s*(Hold|Buy|Sell|Range)[^\n]*/gi, "")
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 20)
+    .slice(0, n)
+    .join(" ")
+    .trim();
+}
+
+function extractPrices(text: string): string[] {
+  const prices: string[] = [];
+  const re = /\$\s?([\d,]+(?:\.\d+)?)|(?:price[d]?|level|target|zone|around|at|near)\s+\$?\s?([\d,]+(?:\.\d+)?)/gi;
+  for (const m of text.matchAll(re)) {
+    const val = (m[1] || m[2] || "").replace(/,/g, "");
+    const num = parseFloat(val);
+    if (num > 100 && !prices.includes(m[1] || m[2]!)) prices.push(m[1] || m[2]!);
+  }
+  return [...new Set(prices)].slice(0, 4);
 }
 
 function DecisionCard({ decision, ticker }: { decision: Record<string, unknown>; ticker: string }) {
@@ -103,7 +139,11 @@ function DecisionCard({ decision, ticker }: { decision: Record<string, unknown>;
   const judge     = String(decision["_judge"]     ?? decision["_final_raw"] ?? decision["_risk_judge"] ?? "");
   const bullPts   = extractBullets(bull);
   const bearPts   = extractBullets(bear);
-  const verdict   = firstSentences(judge, 3);
+  const verdict   = firstSentences(judge, 2);
+
+  // extract price mentions from all agent text
+  const priceText = [allText, bull, bear, judge].join("\n");
+  const mentionedPrices = extractPrices(priceText);
 
   return (
     <div className="space-y-3">
@@ -121,6 +161,20 @@ function DecisionCard({ decision, ticker }: { decision: Record<string, unknown>;
           </div>
         )}
       </div>
+
+      {/* Mentioned price levels */}
+      {mentionedPrices.length > 0 && (
+        <div className="border border-blue-900/30 bg-blue-950/15 p-4">
+          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/45 mb-3">// Price Levels Mentioned</p>
+          <div className="flex flex-wrap gap-2">
+            {mentionedPrices.map((p, i) => (
+              <span key={i} className="px-3 py-1 border border-blue-700/35 bg-blue-900/20 text-sm font-bold text-blue-200 font-mono">
+                {p}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Levels grid */}
       {(supports.length > 0 || resistances.length > 0 || entry || stop || target) && (
