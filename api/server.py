@@ -23,6 +23,11 @@ load_dotenv()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tradingagents-core"))
 
+# allow futures tickers like NQ=F before TradingAgents imports its regex
+import re
+import tradingagents.dataflows.utils as _ta_utils
+_ta_utils._TICKER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-\^=]+$")
+
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
 
