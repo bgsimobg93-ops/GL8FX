@@ -37,7 +37,9 @@ function StatusDot({ status }: { status: Job["status"] }) {
   return <span className={`inline-block w-2 h-2 rounded-full ${colors[status]}`} />;
 }
 
-const SKIP_KEYS = new Set(["action","decision","raw","reasoning","rationale","analysis","reason","summary","confidence","risk","entry_price","entry","buy_price","sell_price","target_price","stop_loss","stop","take_profit","target"]);
+const TEXT_KEYS  = new Set(["reasoning","rationale","analysis","reason","summary","explanation","justification","narrative","commentary","notes"]);
+const PRICE_KEYS = new Set(["entry_price","entry","buy_price","sell_price","target_price","stop_loss","stop","take_profit","target","price"]);
+const META_KEYS  = new Set(["action","decision","raw","confidence","risk","quantity","shares"]);
 
 function parseAction(decision: Record<string, unknown>): "BUY" | "SELL" | "RANGE" {
   const raw = String(decision.action ?? decision.decision ?? decision.raw ?? "").toUpperCase();
@@ -46,114 +48,152 @@ function parseAction(decision: Record<string, unknown>): "BUY" | "SELL" | "RANGE
   return "RANGE";
 }
 
-function ActionBadge({ action }: { action: "BUY" | "SELL" | "RANGE" }) {
-  const styles = {
-    BUY:   "border-emerald-500/60 bg-emerald-950/30 text-emerald-300 shadow-emerald-900/40",
-    SELL:  "border-red-500/60 bg-red-950/30 text-red-300 shadow-red-900/40",
-    RANGE: "border-blue-500/40 bg-blue-950/30 text-blue-300 shadow-blue-900/40",
-  };
-  const icons = { BUY: "▲", SELL: "▼", RANGE: "◆" };
-  return (
-    <div className={`border p-6 text-center shadow-lg ${styles[action]}`}>
-      <p className="text-[9px] tracking-[0.45em] uppercase opacity-50 mb-2">// Signal</p>
-      <p className="text-5xl font-black tracking-wider mb-1">{icons[action]} {action}</p>
-      {action === "RANGE" && (
-        <p className="text-[10px] tracking-widest uppercase opacity-40 mt-1">Consolidation / No Clear Edge</p>
-      )}
-    </div>
-  );
+function collectText(obj: unknown, depth = 0): string[] {
+  if (depth > 4 || obj == null) return [];
+  if (typeof obj === "string" && obj.trim().length > 30) return [obj.trim()];
+  if (Array.isArray(obj)) return obj.flatMap(v => collectText(v, depth + 1));
+  if (typeof obj === "object") {
+    return Object.entries(obj as Record<string, unknown>).flatMap(([k, v]) => {
+      if (META_KEYS.has(k) || PRICE_KEYS.has(k)) return [];
+      return collectText(v, depth + 1);
+    });
+  }
+  return [];
 }
 
 function DecisionCard({ decision, ticker }: { decision: Record<string, unknown>; ticker: string }) {
   const action = parseAction(decision);
 
-  const reasoning = String(
-    decision.reasoning ?? decision.rationale ?? decision.analysis ??
-    decision.reason ?? decision.summary ?? ""
-  ).trim();
+  const actionCfg = {
+    BUY:   { border: "border-emerald-500/60", bg: "bg-emerald-950/25", text: "text-emerald-300", icon: "▲", label: "BUY",   sub: "Bullish signal — upside bias" },
+    SELL:  { border: "border-red-500/60",     bg: "bg-red-950/25",     text: "text-red-300",     icon: "▼", label: "SELL",  sub: "Bearish signal — downside bias" },
+    RANGE: { border: "border-blue-500/35",    bg: "bg-blue-950/20",    text: "text-blue-300",    icon: "◆", label: "RANGE", sub: "No clear edge — wait for confirmation" },
+  }[action];
 
   const confidence = decision.confidence ? String(decision.confidence) : null;
   const risk       = decision.risk       ? String(decision.risk)       : null;
+  const quantity   = decision.quantity   ? String(decision.quantity)   : null;
 
-  const entry   = decision.entry_price  ?? decision.entry  ?? decision.buy_price  ?? decision.sell_price  ?? null;
-  const stop    = decision.stop_loss    ?? decision.stop   ?? null;
-  const target  = decision.take_profit  ?? decision.target ?? decision.target_price ?? null;
+  const entry  = decision.entry_price ?? decision.entry  ?? decision.buy_price ?? decision.sell_price ?? null;
+  const stop   = decision.stop_loss   ?? decision.stop   ?? null;
+  const target = decision.take_profit ?? decision.target ?? decision.target_price ?? null;
 
-  const extras = Object.entries(decision).filter(([k]) => !SKIP_KEYS.has(k));
+  // collect reasoning — first try known text keys, then sweep whole object
+  const directText = ([...TEXT_KEYS] as string[])
+    .map(k => decision[k] ? String(decision[k]).trim() : "")
+    .find(t => t.length > 0) ?? "";
+
+  const allTexts = directText
+    ? [directText]
+    : [...new Set(collectText(decision))].slice(0, 6);
+
+  // remaining scalar fields not covered above
+  const shownKeys = new Set([...TEXT_KEYS, ...PRICE_KEYS, ...META_KEYS]);
+  const extras = Object.entries(decision).filter(([k, v]) =>
+    !shownKeys.has(k) && typeof v !== "object" && String(v).length < 200
+  );
 
   return (
-    <div className="space-y-4">
-      {/* Signal */}
-      <ActionBadge action={action} />
+    <div className="space-y-3">
 
-      {/* Meta row */}
-      {(confidence || risk) && (
-        <div className="grid grid-cols-2 gap-3">
+      {/* ── Signal banner ── */}
+      <div className={`border ${actionCfg.border} ${actionCfg.bg} p-6 text-center`}>
+        <p className="text-[9px] tracking-[0.45em] uppercase opacity-40 mb-2">// Signal · {ticker}</p>
+        <p className={`text-5xl font-black tracking-wider ${actionCfg.text}`}>
+          {actionCfg.icon} {actionCfg.label}
+        </p>
+        <p className="text-[10px] tracking-widest uppercase opacity-35 mt-2">{actionCfg.sub}</p>
+      </div>
+
+      {/* ── Meta row ── */}
+      {(confidence || risk || quantity) && (
+        <div className={`grid gap-2 ${[confidence, risk, quantity].filter(Boolean).length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
           {confidence && (
-            <div className="border border-blue-900/35 bg-blue-950/15 p-4 text-center">
-              <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/50 mb-1">Confidence</p>
-              <p className="text-lg font-bold text-white">{confidence}</p>
+            <div className="border border-blue-900/30 bg-blue-950/15 p-3 text-center">
+              <p className="text-[9px] tracking-widest uppercase text-blue-400/45 mb-1">Confidence</p>
+              <p className="text-base font-bold text-white">{confidence}</p>
             </div>
           )}
           {risk && (
-            <div className="border border-blue-900/35 bg-blue-950/15 p-4 text-center">
-              <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/50 mb-1">Risk</p>
-              <p className="text-lg font-bold text-white">{risk}</p>
+            <div className="border border-blue-900/30 bg-blue-950/15 p-3 text-center">
+              <p className="text-[9px] tracking-widest uppercase text-blue-400/45 mb-1">Risk</p>
+              <p className="text-base font-bold text-white">{risk}</p>
+            </div>
+          )}
+          {quantity && (
+            <div className="border border-blue-900/30 bg-blue-950/15 p-3 text-center">
+              <p className="text-[9px] tracking-widest uppercase text-blue-400/45 mb-1">Size</p>
+              <p className="text-base font-bold text-white">{quantity}</p>
             </div>
           )}
         </div>
       )}
 
-      {/* Entry / Stop / Target */}
+      {/* ── Entry Points ── */}
       {(entry || stop || target) && (
-        <div className="border border-blue-900/35 bg-blue-950/15 p-5">
-          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/55 mb-4">// Entry Points</p>
-          <div className="grid grid-cols-3 gap-3 text-center">
+        <div className="border border-blue-900/30 bg-blue-950/15 p-5">
+          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/50 mb-4">// Potential Entry</p>
+          <div className="grid grid-cols-3 gap-4 text-center">
             {entry && (
               <div>
-                <p className="text-[9px] tracking-widest uppercase text-emerald-400/50 mb-1">Entry</p>
-                <p className="text-sm font-bold text-emerald-300">{String(entry)}</p>
+                <p className="text-[9px] tracking-widest uppercase text-emerald-400/50 mb-1">Entry Zone</p>
+                <p className="text-base font-bold text-emerald-300">{String(entry)}</p>
               </div>
             )}
             {stop && (
               <div>
                 <p className="text-[9px] tracking-widest uppercase text-red-400/50 mb-1">Stop Loss</p>
-                <p className="text-sm font-bold text-red-300">{String(stop)}</p>
+                <p className="text-base font-bold text-red-300">{String(stop)}</p>
               </div>
             )}
             {target && (
               <div>
                 <p className="text-[9px] tracking-widest uppercase text-blue-400/50 mb-1">Target</p>
-                <p className="text-sm font-bold text-blue-300">{String(target)}</p>
+                <p className="text-base font-bold text-blue-300">{String(target)}</p>
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Reasoning */}
-      {reasoning && (
-        <div className="border border-blue-900/35 bg-blue-950/15 p-5">
-          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/55 mb-3">// Analysis & Reasoning</p>
-          <div className="space-y-2">
-            {reasoning.split(/\n+/).map((para, i) => (
-              <p key={i} className="text-sm text-blue-100/75 leading-relaxed">{para}</p>
-            ))}
+      {/* ── Reasoning report ── */}
+      {allTexts.length > 0 && (
+        <div className="border border-blue-900/30 bg-blue-950/15 p-5">
+          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/50 mb-4">
+            // Why {action}?
+          </p>
+          <div className="space-y-3">
+            {allTexts.map((para, i) => {
+              const isBullet = para.startsWith("-") || para.startsWith("•") || para.match(/^\d+\./);
+              return isBullet ? (
+                <div key={i} className="flex gap-2">
+                  <span className="text-blue-400/40 mt-0.5 shrink-0">▸</span>
+                  <p className="text-sm text-blue-100/75 leading-relaxed">
+                    {para.replace(/^[-•]\s*/, "").replace(/^\d+\.\s*/, "")}
+                  </p>
+                </div>
+              ) : (
+                <p key={i} className="text-sm text-blue-100/75 leading-relaxed">{para}</p>
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Extra fields */}
-      {extras.map(([k, v]) => (
-        <div key={k} className="border border-blue-900/25 bg-blue-950/10 p-4">
-          <p className="text-[9px] tracking-[0.3em] uppercase text-blue-400/45 mb-1">
-            {k.replace(/_/g, " ")}
-          </p>
-          <p className="text-sm text-blue-100/65 leading-relaxed whitespace-pre-wrap">
-            {typeof v === "object" ? JSON.stringify(v, null, 2) : String(v)}
-          </p>
+      {/* ── Extra scalar fields ── */}
+      {extras.length > 0 && (
+        <div className="border border-blue-900/20 bg-blue-950/10 p-4 space-y-3">
+          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/40">// Key Facts</p>
+          {extras.map(([k, v]) => (
+            <div key={k} className="flex justify-between items-start gap-4">
+              <p className="text-[10px] tracking-widest uppercase text-blue-400/40 shrink-0">
+                {k.replace(/_/g, " ")}
+              </p>
+              <p className="text-sm text-blue-100/65 text-right">{String(v)}</p>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
