@@ -42,232 +42,149 @@ const PRICE_KEYS = new Set(["entry_price","entry","buy_price","sell_price","targ
 const META_KEYS  = new Set(["action","decision","raw","confidence","risk","quantity","shares"]);
 
 function parseAction(decision: Record<string, unknown>): "BUY" | "SELL" | "RANGE" {
-  const raw = String(decision.action ?? decision.decision ?? decision.raw ?? "").toUpperCase();
+  const raw = String(decision.action ?? decision.decision ?? decision.raw ?? decision["_final_raw"] ?? "").toUpperCase();
   if (raw.includes("BUY") || raw.includes("LONG"))   return "BUY";
   if (raw.includes("SELL") || raw.includes("SHORT")) return "SELL";
   return "RANGE";
 }
 
-function collectText(obj: unknown, depth = 0): string[] {
-  if (depth > 4 || obj == null) return [];
-  if (typeof obj === "string" && obj.trim().length > 30) return [obj.trim()];
-  if (Array.isArray(obj)) return obj.flatMap(v => collectText(v, depth + 1));
-  if (typeof obj === "object") {
-    return Object.entries(obj as Record<string, unknown>).flatMap(([k, v]) => {
-      if (META_KEYS.has(k) || PRICE_KEYS.has(k)) return [];
-      return collectText(v, depth + 1);
-    });
+function extractBullets(text: string, max = 3): string[] {
+  if (!text) return [];
+  const numbered = [...text.matchAll(/(?:^|\n)\s*\d+\.\s+\*{0,2}([^\n*]+)\*{0,2}/gm)].map(m => m[1].trim());
+  if (numbered.length >= 2) return numbered.filter(s => s.length > 10).slice(0, max);
+  const dashed = [...text.matchAll(/(?:^|\n)\s*[-•]\s+\*{0,2}([^\n*]+)\*{0,2}/gm)].map(m => m[1].trim());
+  if (dashed.length >= 2) return dashed.filter(s => s.length > 10).slice(0, max);
+  return text.split(/[.!?]\s+/).map(s => s.trim()).filter(s => s.length > 25 && !s.startsWith("#")).slice(0, max);
+}
+
+function extractLevels(text: string): { supports: string[]; resistances: string[] } {
+  const sup: string[] = [], res: string[] = [];
+  const patterns: [RegExp, typeof sup][] = [
+    [/support\s+(?:at|around|near|level[s]?)?\s*\$?([\d,]+(?:\.\d+)?)/gi, sup],
+    [/\$?([\d,]+(?:\.\d+)?)\s+support/gi, sup],
+    [/resistance\s+(?:at|around|near|level[s]?)?\s*\$?([\d,]+(?:\.\d+)?)/gi, res],
+    [/\$?([\d,]+(?:\.\d+)?)\s+resistance/gi, res],
+  ];
+  for (const [re, arr] of patterns) {
+    for (const m of text.matchAll(re)) {
+      const n = m[1];
+      if (n && !arr.includes(n)) arr.push(n);
+    }
   }
-  return [];
+  return { supports: sup.slice(0, 2), resistances: res.slice(0, 2) };
+}
+
+function firstSentences(text: string, n = 2): string {
+  return text.split(/(?<=[.!?])\s+/).slice(0, n).join(" ").replace(/#+\s*/g, "").replace(/\*\*/g, "").trim();
 }
 
 function DecisionCard({ decision, ticker }: { decision: Record<string, unknown>; ticker: string }) {
   const action = parseAction(decision);
 
-  const actionCfg = {
-    BUY:   { border: "border-emerald-500/60", bg: "bg-emerald-950/25", text: "text-emerald-300", icon: "▲", label: "BUY",   sub: "Bullish signal — upside bias" },
-    SELL:  { border: "border-red-500/60",     bg: "bg-red-950/25",     text: "text-red-300",     icon: "▼", label: "SELL",  sub: "Bearish signal — downside bias" },
-    RANGE: { border: "border-blue-500/35",    bg: "bg-blue-950/20",    text: "text-blue-300",    icon: "◆", label: "RANGE", sub: "No clear edge — wait for confirmation" },
+  const cfg = {
+    BUY:   { border: "border-emerald-500/60", bg: "bg-emerald-950/25", text: "text-emerald-300", icon: "▲" },
+    SELL:  { border: "border-red-500/60",     bg: "bg-red-950/25",     text: "text-red-300",     icon: "▼" },
+    RANGE: { border: "border-blue-500/35",    bg: "bg-blue-950/20",    text: "text-blue-300",    icon: "◆" },
   }[action];
-
-  const confidence = decision.confidence ? String(decision.confidence) : null;
-  const risk       = decision.risk       ? String(decision.risk)       : null;
-  const quantity   = decision.quantity   ? String(decision.quantity)   : null;
 
   const entry  = decision.entry_price ?? decision.entry  ?? decision.buy_price ?? decision.sell_price ?? null;
   const stop   = decision.stop_loss   ?? decision.stop   ?? null;
   const target = decision.take_profit ?? decision.target ?? decision.target_price ?? null;
 
-  // collect reasoning — first try known text keys, then sweep whole object
-  const directText = ([...TEXT_KEYS] as string[])
-    .map(k => decision[k] ? String(decision[k]).trim() : "")
-    .find(t => t.length > 0) ?? "";
+  const allText = [
+    decision["_market_report"], decision["_fundamentals_report"],
+    decision["_news_report"],   decision["_sentiment_report"],
+  ].map(v => String(v ?? "")).join("\n");
 
-  const allTexts = directText
-    ? [directText]
-    : [...new Set(collectText(decision))].slice(0, 6);
+  const { supports, resistances } = extractLevels(allText);
 
-  // remaining scalar fields not covered above
-  const shownKeys = new Set([...TEXT_KEYS, ...PRICE_KEYS, ...META_KEYS]);
-  const extras = Object.entries(decision).filter(([k, v]) =>
-    !shownKeys.has(k) && typeof v !== "object" && String(v).length < 200
-  );
+  const bull      = String(decision["_bull_case"] ?? "");
+  const bear      = String(decision["_bear_case"] ?? "");
+  const judge     = String(decision["_judge"]     ?? decision["_final_raw"] ?? decision["_risk_judge"] ?? "");
+  const bullPts   = extractBullets(bull);
+  const bearPts   = extractBullets(bear);
+  const verdict   = firstSentences(judge, 3);
 
   return (
     <div className="space-y-3">
 
-      {/* ── Signal banner ── */}
-      <div className={`border ${actionCfg.border} ${actionCfg.bg} p-6 text-center`}>
-        <p className="text-[9px] tracking-[0.45em] uppercase opacity-40 mb-2">// Signal · {ticker}</p>
-        <p className={`text-5xl font-black tracking-wider ${actionCfg.text}`}>
-          {actionCfg.icon} {actionCfg.label}
-        </p>
-        <p className="text-[10px] tracking-widest uppercase opacity-35 mt-2">{actionCfg.sub}</p>
+      {/* Signal */}
+      <div className={`border ${cfg.border} ${cfg.bg} flex items-center justify-between px-6 py-4`}>
+        <div>
+          <p className="text-[9px] tracking-[0.4em] uppercase opacity-40 mb-1">// Signal · {ticker}</p>
+          <p className={`text-3xl font-black tracking-wider ${cfg.text}`}>{cfg.icon} {action}</p>
+        </div>
+        {(decision.confidence || decision.risk) && (
+          <div className="text-right">
+            {decision.confidence && <p className="text-xs text-blue-400/50 uppercase tracking-widest">Conf: <span className="text-white font-bold">{String(decision.confidence)}</span></p>}
+            {decision.risk       && <p className="text-xs text-blue-400/50 uppercase tracking-widest mt-1">Risk: <span className="text-white font-bold">{String(decision.risk)}</span></p>}
+          </div>
+        )}
       </div>
 
-      {/* ── Meta row ── */}
-      {(confidence || risk || quantity) && (
-        <div className={`grid gap-2 ${[confidence, risk, quantity].filter(Boolean).length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
-          {confidence && (
-            <div className="border border-blue-900/30 bg-blue-950/15 p-3 text-center">
-              <p className="text-[9px] tracking-widest uppercase text-blue-400/45 mb-1">Confidence</p>
-              <p className="text-base font-bold text-white">{confidence}</p>
-            </div>
-          )}
-          {risk && (
-            <div className="border border-blue-900/30 bg-blue-950/15 p-3 text-center">
-              <p className="text-[9px] tracking-widest uppercase text-blue-400/45 mb-1">Risk</p>
-              <p className="text-base font-bold text-white">{risk}</p>
-            </div>
-          )}
-          {quantity && (
-            <div className="border border-blue-900/30 bg-blue-950/15 p-3 text-center">
-              <p className="text-[9px] tracking-widest uppercase text-blue-400/45 mb-1">Size</p>
-              <p className="text-base font-bold text-white">{quantity}</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Entry Points ── */}
-      {(entry || stop || target) && (
-        <div className="border border-blue-900/30 bg-blue-950/15 p-5">
-          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/50 mb-4">// Potential Entry</p>
-          <div className="grid grid-cols-3 gap-4 text-center">
-            {entry && (
-              <div>
-                <p className="text-[9px] tracking-widest uppercase text-emerald-400/50 mb-1">Entry Zone</p>
-                <p className="text-base font-bold text-emerald-300">{String(entry)}</p>
-              </div>
-            )}
-            {stop && (
-              <div>
-                <p className="text-[9px] tracking-widest uppercase text-red-400/50 mb-1">Stop Loss</p>
-                <p className="text-base font-bold text-red-300">{String(stop)}</p>
-              </div>
-            )}
-            {target && (
-              <div>
-                <p className="text-[9px] tracking-widest uppercase text-blue-400/50 mb-1">Target</p>
-                <p className="text-base font-bold text-blue-300">{String(target)}</p>
-              </div>
-            )}
+      {/* Levels grid */}
+      {(supports.length > 0 || resistances.length > 0 || entry || stop || target) && (
+        <div className="grid grid-cols-3 gap-2">
+          <div className="border border-blue-900/30 bg-blue-950/15 p-4">
+            <p className="text-[9px] tracking-widest uppercase text-emerald-400/50 mb-2">Support</p>
+            {supports.length > 0
+              ? supports.map((s, i) => <p key={i} className="text-sm font-bold text-emerald-300">{s}</p>)
+              : entry ? <p className="text-sm font-bold text-emerald-300">{String(entry)}</p>
+              : <p className="text-xs text-blue-400/30">—</p>}
+          </div>
+          <div className="border border-blue-900/30 bg-blue-950/15 p-4">
+            <p className="text-[9px] tracking-widest uppercase text-red-400/50 mb-2">Resistance</p>
+            {resistances.length > 0
+              ? resistances.map((r, i) => <p key={i} className="text-sm font-bold text-red-300">{r}</p>)
+              : target ? <p className="text-sm font-bold text-red-300">{String(target)}</p>
+              : <p className="text-xs text-blue-400/30">—</p>}
+          </div>
+          <div className="border border-blue-900/30 bg-blue-950/15 p-4">
+            <p className="text-[9px] tracking-widest uppercase text-blue-400/50 mb-2">Entry / Stop</p>
+            {entry && <p className="text-sm font-bold text-blue-300">{String(entry)}</p>}
+            {stop  && <p className="text-xs text-red-300/70 mt-1">SL: {String(stop)}</p>}
+            {!entry && !stop && <p className="text-xs text-blue-400/30">—</p>}
           </div>
         </div>
       )}
 
-      {/* ── Reasoning report ── */}
-      {allTexts.length > 0 && (
-        <div className="border border-blue-900/30 bg-blue-950/15 p-5">
-          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/50 mb-4">
-            // Why {action}?
-          </p>
-          <div className="space-y-3">
-            {allTexts.map((para, i) => {
-              const isBullet = para.startsWith("-") || para.startsWith("•") || para.match(/^\d+\./);
-              return isBullet ? (
-                <div key={i} className="flex gap-2">
-                  <span className="text-blue-400/40 mt-0.5 shrink-0">▸</span>
-                  <p className="text-sm text-blue-100/75 leading-relaxed">
-                    {para.replace(/^[-•]\s*/, "").replace(/^\d+\.\s*/, "")}
-                  </p>
-                </div>
-              ) : (
-                <p key={i} className="text-sm text-blue-100/75 leading-relaxed">{para}</p>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ── Extra scalar fields ── */}
-      {extras.length > 0 && (
-        <div className="border border-blue-900/20 bg-blue-950/10 p-4 space-y-3">
-          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/40">// Key Facts</p>
-          {extras.map(([k, v]) => (
-            <div key={k} className="flex justify-between items-start gap-4">
-              <p className="text-[10px] tracking-widest uppercase text-blue-400/40 shrink-0">
-                {k.replace(/_/g, " ")}
-              </p>
-              <p className="text-sm text-blue-100/65 text-right">{String(v)}</p>
+      {/* Bull vs Bear */}
+      {(bullPts.length > 0 || bearPts.length > 0) && (
+        <div className="grid grid-cols-2 gap-2">
+          {bullPts.length > 0 && (
+            <div className="border border-emerald-900/35 bg-emerald-950/10 p-4">
+              <p className="text-[9px] tracking-widest uppercase text-emerald-400/55 mb-3">▲ Bull</p>
+              <ul className="space-y-2">
+                {bullPts.map((pt, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-blue-100/65 leading-relaxed">
+                    <span className="text-emerald-500/50 shrink-0 mt-0.5">▸</span>{pt}
+                  </li>
+                ))}
+              </ul>
             </div>
-          ))}
+          )}
+          {bearPts.length > 0 && (
+            <div className="border border-red-900/35 bg-red-950/10 p-4">
+              <p className="text-[9px] tracking-widest uppercase text-red-400/55 mb-3">▼ Bear</p>
+              <ul className="space-y-2">
+                {bearPts.map((pt, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-blue-100/65 leading-relaxed">
+                    <span className="text-red-500/50 shrink-0 mt-0.5">▸</span>{pt}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 
-      {/* ── Per-agent breakdown ── */}
-      <AgentReports decision={decision} />
-    </div>
-  );
-}
-
-function ReportBlock({ label, text, accent }: { label: string; text: string; accent?: string }) {
-  if (!text) return null;
-  return (
-    <div className={`border ${accent ?? "border-blue-900/25"} bg-blue-950/10 p-5`}>
-      <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/45 mb-3">{label}</p>
-      <div className="space-y-2">
-        {text.split(/\n+/).filter(l => l.trim()).map((line, i) => (
-          <p key={i} className="text-sm text-blue-100/70 leading-relaxed">{line.trim()}</p>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function DebateBlock({ bullText, bearText, judge }: { bullText: string; bearText: string; judge: string }) {
-  if (!bullText && !bearText && !judge) return null;
-  return (
-    <div className="border border-blue-900/25 bg-blue-950/10 p-5 space-y-4">
-      <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/45">// Investment Debate</p>
-      {bullText && (
-        <div className="border-l-2 border-emerald-500/40 pl-4">
-          <p className="text-[9px] tracking-widest uppercase text-emerald-400/55 mb-2">Bull Case</p>
-          <p className="text-sm text-blue-100/65 leading-relaxed line-clamp-6">{bullText}</p>
+      {/* Verdict */}
+      {verdict && (
+        <div className="border border-blue-900/30 bg-blue-950/15 p-4">
+          <p className="text-[9px] tracking-[0.35em] uppercase text-blue-400/45 mb-2">// Verdict</p>
+          <p className="text-sm text-blue-100/75 leading-relaxed">{verdict}</p>
         </div>
       )}
-      {bearText && (
-        <div className="border-l-2 border-red-500/40 pl-4">
-          <p className="text-[9px] tracking-widest uppercase text-red-400/55 mb-2">Bear Case</p>
-          <p className="text-sm text-blue-100/65 leading-relaxed line-clamp-6">{bearText}</p>
-        </div>
-      )}
-      {judge && (
-        <div className="border-l-2 border-blue-400/40 pl-4">
-          <p className="text-[9px] tracking-widest uppercase text-blue-400/55 mb-2">Judge Decision</p>
-          <p className="text-sm text-blue-100/65 leading-relaxed">{judge}</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AgentReports({ decision }: { decision: Record<string, unknown> }) {
-  const market       = String(decision["_market_report"]       ?? "").trim();
-  const sentiment    = String(decision["_sentiment_report"]    ?? "").trim();
-  const news         = String(decision["_news_report"]         ?? "").trim();
-  const fundamentals = String(decision["_fundamentals_report"] ?? "").trim();
-  const plan         = String(decision["_investment_plan"]     ?? "").trim();
-  const finalRaw     = String(decision["_final_raw"]           ?? "").trim();
-  const bull         = String(decision["_bull_case"]           ?? "").trim();
-  const bear         = String(decision["_bear_case"]           ?? "").trim();
-  const judge        = String(decision["_judge"]               ?? "").trim();
-  const riskJudge    = String(decision["_risk_judge"]          ?? "").trim();
-
-  const hasAny = [market, sentiment, news, fundamentals, plan, finalRaw, bull, bear, judge, riskJudge].some(s => s.length > 0);
-  if (!hasAny) return null;
-
-  return (
-    <div className="space-y-3 pt-2">
-      <p className="text-[9px] tracking-[0.45em] uppercase text-blue-400/35">── Agent Reports ──────────────────</p>
-      <ReportBlock label="// Market Analyst"       text={market}       accent="border-blue-800/30" />
-      <ReportBlock label="// Fundamentals Analyst" text={fundamentals} accent="border-blue-800/30" />
-      <ReportBlock label="// News Analyst"         text={news}         accent="border-blue-800/30" />
-      <ReportBlock label="// Social Sentiment"     text={sentiment}    accent="border-blue-800/30" />
-      <DebateBlock bullText={bull} bearText={bear} judge={judge} />
-      <ReportBlock label="// Risk Assessment"      text={riskJudge}    accent="border-amber-900/30" />
-      <ReportBlock label="// Investment Plan"      text={plan}         accent="border-blue-800/30" />
-      {finalRaw && <ReportBlock label="// Final Decision (Raw)" text={finalRaw} accent="border-blue-700/30" />}
     </div>
   );
 }
