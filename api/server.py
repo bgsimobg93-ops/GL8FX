@@ -46,16 +46,21 @@ _jobs: dict[str, dict] = {}
 _BRIEF_PROMPT = """You are a concise trading analyst. Extract a structured brief from the analysis below.
 Return ONLY valid JSON — no markdown, no extra text.
 
+CRITICAL RULES:
+- For ALL price fields (entry, stop_loss, target, support_levels, resistance_levels): ONLY use prices that are EXPLICITLY mentioned in the analysis text. If no specific price is mentioned, use null or empty array. NEVER invent or estimate prices.
+- Bull and bear points must come ONLY from the analysis — 3 items each, under 10 words each.
+- Action must be BUY, SELL, or RANGE.
+
 {{
   "action": "BUY or SELL or RANGE",
-  "support_levels": ["up to 2 specific price levels as strings, e.g. '3,200' or '19,450'"],
-  "resistance_levels": ["up to 2 specific price levels as strings"],
-  "entry": "specific price or null",
-  "stop_loss": "specific price or null",
-  "target": "specific price or null",
-  "bull_points": ["exactly 3 items, each under 10 words, no filler"],
-  "bear_points": ["exactly 3 items, each under 10 words, no filler"],
-  "verdict": "1 sentence max 25 words explaining the final recommendation"
+  "support_levels": ["only prices explicitly mentioned as support in the text, or empty array []"],
+  "resistance_levels": ["only prices explicitly mentioned as resistance in the text, or empty array []"],
+  "entry": "price explicitly mentioned as entry zone in the text, or null",
+  "stop_loss": "price explicitly mentioned as stop loss in the text, or null",
+  "target": "price explicitly mentioned as target in the text, or null",
+  "bull_points": ["exactly 3 items from the analysis, each under 10 words, no filler phrases"],
+  "bear_points": ["exactly 3 items from the analysis, each under 10 words, no filler phrases"],
+  "verdict": "1 sentence max 25 words from the judge decision"
 }}
 
 Analysis for {ticker}:
