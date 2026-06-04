@@ -14,6 +14,7 @@ import {
   Eye,
   EyeOff,
   Layers,
+  Lightbulb,
   Plus,
   RefreshCw,
   Settings,
@@ -24,6 +25,7 @@ import {
   Wallet,
   X,
   XCircle,
+  Zap,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -152,6 +154,105 @@ function pairingDailyPnL(pairing: Pairing, accounts: Account[]): number {
     const acc = accounts.find((a) => a.id === id);
     return sum + (acc?.dailyPnL ?? 0);
   }, 0);
+}
+
+// ─── Recommendation Engine ────────────────────────────────────────────────────
+
+interface PairRec {
+  accounts: Account[];
+  combinedProfit: number;
+  avgDailyPnL: number;
+  estimatedDays: number | null; // null = negative P&L, 0 = already done
+  riskLevel: "low" | "medium" | "high";
+  score: number;
+  summary: string;
+  badge: "instant" | "fast" | "slow" | "negative";
+}
+
+interface SplitRec {
+  pairs: Account[][];
+  pairDays: (number | null)[];
+  maxDays: number;
+}
+
+function calcRisk(accs: Account[]): "low" | "medium" | "high" {
+  const minBuf = Math.min(
+    ...accs.map((a) => ((a.balance - a.maxTrailingDrawdown) / a.accountSize) * 100)
+  );
+  return minBuf < 5 ? "high" : minBuf < 10 ? "medium" : "low";
+}
+
+function estimateDays(profit: number, dailyPnL: number, target: number): number | null {
+  const remaining = Math.max(0, target - profit);
+  if (remaining === 0) return 0;
+  if (dailyPnL <= 0) return null;
+  return remaining / dailyPnL;
+}
+
+function generatePairRecs(accs: Account[], target: number): PairRec[] {
+  const recs: PairRec[] = [];
+  for (let i = 0; i < accs.length; i++) {
+    for (let j = i + 1; j < accs.length; j++) {
+      const pair = [accs[i], accs[j]];
+      const combinedProfit = pair.reduce((s, a) => s + (a.balance - a.startingBalance), 0);
+      const avgDailyPnL = pair.reduce((s, a) => s + a.dailyPnL, 0);
+      const days = estimateDays(combinedProfit, avgDailyPnL, target);
+      const risk = calcRisk(pair);
+
+      const riskPenalty = risk === "high" ? 50 : risk === "medium" ? 15 : 0;
+      const dayScore = days === null ? 9999 : days;
+      const score = dayScore + riskPenalty;
+
+      let summary = "";
+      let badge: PairRec["badge"] = "slow";
+      if (days === 0) {
+        summary = "Вече над целта — готово за Фаза 2!";
+        badge = "instant";
+      } else if (days !== null && days <= 5) {
+        summary = `~${Math.ceil(days)} търг. дни до ${fmt(target)}`;
+        badge = "fast";
+      } else if (days !== null) {
+        summary = `~${Math.ceil(days)} търг. дни до ${fmt(target)}`;
+        badge = "slow";
+      } else {
+        summary = "Отрицателен P&L — нужна промяна в стратегията";
+        badge = "negative";
+      }
+
+      recs.push({ accounts: pair, combinedProfit, avgDailyPnL, estimatedDays: days, riskLevel: risk, score, summary, badge });
+    }
+  }
+  return recs.sort((a, b) => a.score - b.score);
+}
+
+function generateOptimalSplits(accs: Account[], target: number): SplitRec[] {
+  if (accs.length < 4 || accs.length % 2 !== 0) return [];
+
+  const splits: Account[][][] = [];
+
+  const partition = (remaining: Account[], current: Account[][]) => {
+    if (remaining.length === 0) { splits.push([...current]); return; }
+    const first = remaining[0];
+    const rest = remaining.slice(1);
+    for (let i = 0; i < rest.length; i++) {
+      partition(rest.filter((_, idx) => idx !== i), [...current, [first, rest[i]]]);
+    }
+  };
+
+  partition(accs, []);
+
+  return splits
+    .map((split) => {
+      const pairDays = split.map((pair) => {
+        const profit = pair.reduce((s, a) => s + (a.balance - a.startingBalance), 0);
+        const pnl = pair.reduce((s, a) => s + a.dailyPnL, 0);
+        return estimateDays(profit, pnl, target);
+      });
+      const maxDays = Math.max(...pairDays.map((d) => (d === null ? 9999 : d)));
+      return { pairs: split, pairDays, maxDays };
+    })
+    .sort((a, b) => a.maxDays - b.maxDays)
+    .slice(0, 3);
 }
 
 const PAIRING_STORAGE_KEY = "apex-pairings-v1";
@@ -580,6 +681,286 @@ function PairingCard({
   );
 }
 
+// ─── Suggest Pairings Modal ───────────────────────────────────────────────────
+
+function SuggestPairingsModal({
+  accounts,
+  onCreatePairing,
+  onCreateAll,
+  onClose,
+}: {
+  accounts: Account[];
+  onCreatePairing: (ids: string[], name: string) => void;
+  onCreateAll: (groups: string[][]) => void;
+  onClose: () => void;
+}) {
+  const eligible = accounts.filter((a) => a.status !== "failed");
+  const [selectedIds, setSelectedIds] = useState<string[]>(eligible.map((a) => a.id));
+  const [phase1Target] = useState(3000);
+  const [analyzed, setAnalyzed] = useState(false);
+  const [pairRecs, setPairRecs] = useState<PairRec[]>([]);
+  const [splitRecs, setSplitRecs] = useState<SplitRec[]>([]);
+
+  const selectedAccounts = eligible.filter((a) => selectedIds.includes(a.id));
+
+  const toggle = (id: string) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const analyze = () => {
+    setPairRecs(generatePairRecs(selectedAccounts, phase1Target));
+    setSplitRecs(generateOptimalSplits(selectedAccounts, phase1Target));
+    setAnalyzed(true);
+  };
+
+  const badgeStyle = (badge: PairRec["badge"]) => {
+    if (badge === "instant") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (badge === "fast") return "border-blue-200 bg-blue-50 text-blue-700";
+    if (badge === "slow") return "border-yellow-200 bg-yellow-50 text-yellow-700";
+    return "border-red-200 bg-red-50 text-red-600";
+  };
+
+  const badgeLabel = (badge: PairRec["badge"]) => {
+    if (badge === "instant") return "Готово";
+    if (badge === "fast") return "Бързо";
+    if (badge === "slow") return "Бавно";
+    return "Проблем";
+  };
+
+  const rankIcon = (i: number) => ["🥇", "🥈", "🥉"][i] ?? `${i + 1}.`;
+
+  const pairName = (pair: Account[], i: number) =>
+    `Комбо ${i + 1}: ${pair.map((a) => a.id.split("-")[1]).join("+")}`;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.18 }}
+        className="w-full max-w-2xl overflow-hidden rounded-[24px] bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-100">
+              <Lightbulb className="h-4 w-4 text-purple-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold">Препоръчай групиране</h3>
+              <p className="text-xs text-slate-400">Изберете акаунти — системата ще намери оптималните двойки</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-lg border border-slate-200 p-1.5 text-slate-400 hover:text-slate-900">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="max-h-[75vh] overflow-y-auto">
+          {/* Account selector */}
+          <div className="px-6 pt-5 pb-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-sm font-medium text-slate-700">
+                Акаунти за анализ ({selectedIds.length} избрани)
+              </span>
+              <div className="flex gap-2">
+                <button onClick={() => setSelectedIds(eligible.map((a) => a.id))}
+                  className="text-xs text-blue-600 hover:underline">Избери всички</button>
+                <span className="text-slate-300">·</span>
+                <button onClick={() => setSelectedIds([])}
+                  className="text-xs text-slate-400 hover:underline">Изчисти</button>
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {eligible.map((acc) => {
+                const selected = selectedIds.includes(acc.id);
+                const profit = acc.balance - acc.startingBalance;
+                return (
+                  <button key={acc.id} onClick={() => toggle(acc.id)}
+                    className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left text-sm transition ${
+                      selected ? "border-slate-800 bg-slate-900 text-white" : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                    }`}
+                  >
+                    <div className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border-2 ${
+                      selected ? "border-white" : "border-slate-300"
+                    }`}>
+                      {selected && <div className="h-2 w-2 rounded-sm bg-white" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-xs opacity-60">{acc.id}</span>
+                        <span className="truncate font-semibold">{acc.traderName}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs opacity-70 mt-0.5">
+                        <span>{fmt(acc.accountSize)}</span>
+                        <span className={profit >= 0 ? (selected ? "text-emerald-300" : "text-emerald-600") : (selected ? "text-red-300" : "text-red-500")}>
+                          {profit >= 0 ? "+" : ""}{fmt(profit)}
+                        </span>
+                        <span className={acc.dailyPnL >= 0 ? (selected ? "text-emerald-300" : "text-emerald-600") : (selected ? "text-red-300" : "text-red-500")}>
+                          ({acc.dailyPnL >= 0 ? "+" : ""}{fmt(acc.dailyPnL)}/ден)
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              onClick={analyze}
+              disabled={selectedIds.length < 2}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-purple-600 py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-40"
+            >
+              <Zap className="h-4 w-4" />
+              Анализирай {selectedIds.length >= 2 ? `${selectedIds.length} акаунта` : "(изберете поне 2)"}
+            </button>
+          </div>
+
+          {/* Results */}
+          {analyzed && (
+            <div className="border-t border-slate-100 px-6 py-5 space-y-6">
+
+              {/* Top pair recommendations */}
+              <div>
+                <div className="mb-3 flex items-center gap-2">
+                  <Target className="h-4 w-4 text-slate-500" />
+                  <span className="font-semibold text-slate-700">
+                    Препоръчани двойки за Фаза 1 ({fmt(phase1Target)} цел)
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {pairRecs.slice(0, 5).map((rec, i) => (
+                    <div key={i} className={`rounded-xl border p-4 ${
+                      rec.badge === "instant" ? "border-emerald-200 bg-emerald-50" :
+                      rec.badge === "fast" ? "border-blue-100 bg-blue-50/50" :
+                      rec.badge === "negative" ? "border-red-100 bg-red-50/50 opacity-75" :
+                      "border-slate-200 bg-white"
+                    }`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 text-lg leading-none">{rankIcon(i)}</span>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {rec.accounts.map((a) => (
+                                <span key={a.id} className="rounded bg-white/80 border border-slate-200 px-2 py-0.5 font-mono text-xs font-semibold">
+                                  {a.id} <span className="font-normal text-slate-400">({a.traderName.split(" ")[0]})</span>
+                                </span>
+                              ))}
+                            </div>
+                            <div className="mt-1.5 text-sm text-slate-600">{rec.summary}</div>
+                            <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-400">
+                              <span>Комб. профит: <strong className={rec.combinedProfit >= 0 ? "text-emerald-600" : "text-red-500"}>
+                                {rec.combinedProfit >= 0 ? "+" : ""}{fmt(rec.combinedProfit)}
+                              </strong></span>
+                              <span>·</span>
+                              <span>P&L/ден: <strong className={rec.avgDailyPnL >= 0 ? "text-emerald-600" : "text-red-500"}>
+                                {rec.avgDailyPnL >= 0 ? "+" : ""}{fmt(rec.avgDailyPnL)}
+                              </strong></span>
+                              {rec.riskLevel !== "low" && (
+                                <><span>·</span>
+                                <span className={rec.riskLevel === "high" ? "text-red-500 font-semibold" : "text-yellow-600"}>
+                                  ⚠ {rec.riskLevel === "high" ? "Висок" : "Среден"} риск
+                                </span></>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-2 shrink-0">
+                          <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${badgeStyle(rec.badge)}`}>
+                            {badgeLabel(rec.badge)}
+                          </span>
+                          {rec.badge !== "negative" && (
+                            <button
+                              onClick={() => onCreatePairing(rec.accounts.map((a) => a.id), pairName(rec.accounts, i))}
+                              className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 transition"
+                            >
+                              Създай
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Optimal full split */}
+              {splitRecs.length > 0 && (
+                <div>
+                  <div className="mb-3 flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-slate-500" />
+                    <span className="font-semibold text-slate-700">
+                      Оптимално разпределение на {selectedIds.length} акаунта → {selectedIds.length / 2} двойки
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    {splitRecs.map((split, si) => (
+                      <div key={si} className={`rounded-xl border p-4 ${si === 0 ? "border-purple-200 bg-purple-50/40" : "border-slate-200 bg-white"}`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-slate-700">
+                              {si === 0 ? "🏆 Най-бърз вариант" : si === 1 ? "Вариант 2" : "Вариант 3"}
+                            </span>
+                            <span className="rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-xs text-purple-700">
+                              макс. {split.maxDays === 9999 ? "N/A" : `~${Math.ceil(split.maxDays)} дни`}
+                            </span>
+                          </div>
+                          {si === 0 && (
+                            <button
+                              onClick={() => onCreateAll(split.pairs.map((pair, pi) => pair.map((a) => a.id)))}
+                              className="flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 transition"
+                            >
+                              <Plus className="h-3 w-3" />
+                              Създай {split.pairs.length} комбинации
+                            </button>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          {split.pairs.map((pair, pi) => {
+                            const days = split.pairDays[pi];
+                            return (
+                              <div key={pi} className="flex items-center gap-3 rounded-lg bg-white/80 border border-slate-100 px-3 py-2">
+                                <span className="text-xs text-slate-400 w-16 shrink-0">Двойка {pi + 1}</span>
+                                <div className="flex flex-1 flex-wrap gap-1">
+                                  {pair.map((a) => (
+                                    <span key={a.id} className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs">
+                                      {a.id}
+                                    </span>
+                                  ))}
+                                </div>
+                                <span className={`text-xs font-medium shrink-0 ${
+                                  days === 0 ? "text-emerald-600" :
+                                  days !== null && days <= 5 ? "text-blue-600" :
+                                  days !== null ? "text-yellow-600" : "text-red-500"
+                                }`}>
+                                  {days === 0 ? "Готово" : days !== null ? `~${Math.ceil(days)} дни` : "⚠ отриц."}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-slate-100 px-6 py-4">
+          <button onClick={onClose} className="w-full rounded-xl border border-slate-200 py-2.5 text-sm font-medium hover:bg-slate-50 transition">
+            Затвори
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ─── Create Pairing Modal ─────────────────────────────────────────────────────
 
 function CreatePairingModal({
@@ -965,6 +1346,7 @@ export default function ApexMonitor() {
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showCreatePairing, setShowCreatePairing] = useState(false);
+  const [showSuggest, setShowSuggest] = useState(false);
 
   const [pairings, setPairings] = useState<Pairing[]>([]);
 
@@ -1015,6 +1397,43 @@ export default function ApexMonitor() {
   const handleCreatePairing = (pairing: Pairing) => {
     updatePairings([...pairings, pairing]);
     setShowCreatePairing(false);
+    setActiveTab("combinations");
+  };
+
+  const buildPairing = (ids: string[], name: string): Pairing => {
+    const startBals: Record<string, number> = {};
+    for (const id of ids) {
+      const acc = accounts.find((a) => a.id === id);
+      if (acc) startBals[id] = acc.startingBalance;
+    }
+    return {
+      id: `pair-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      accountIds: ids,
+      phase: 1,
+      phase1Target: 3000,
+      phase2Target: 2600,
+      phase2DayLimit: 5,
+      phase1StartBalances: startBals,
+      phase2StartBalances: null,
+      phase2TradingDays: [],
+      status: "active",
+      createdAt: new Date().toISOString(),
+    };
+  };
+
+  const handleCreateFromSuggestion = (ids: string[], name: string) => {
+    updatePairings([...pairings, buildPairing(ids, name)]);
+    setShowSuggest(false);
+    setActiveTab("combinations");
+  };
+
+  const handleCreateAllFromSplit = (groups: string[][]) => {
+    const newPairings = groups.map((ids, i) =>
+      buildPairing(ids, `Комбо ${pairings.length + i + 1}`)
+    );
+    updatePairings([...pairings, ...newPairings]);
+    setShowSuggest(false);
     setActiveTab("combinations");
   };
 
@@ -1238,20 +1657,29 @@ export default function ApexMonitor() {
         {/* Combinations tab */}
         {activeTab === "combinations" && (
           <div className="mt-6">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div>
                 <h2 className="text-lg font-bold">Комбинации на акаунти</h2>
                 <p className="text-sm text-slate-500 mt-0.5">
                   Проследяване на комбинирани акаунти с двуфазни цели за профит
                 </p>
               </div>
-              <button
-                onClick={() => setShowCreatePairing(true)}
-                className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
-              >
-                <Plus className="h-4 w-4" />
-                Нова комбинация
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowSuggest(true)}
+                  className="flex items-center gap-2 rounded-xl border border-purple-200 bg-purple-50 px-4 py-2.5 text-sm font-semibold text-purple-700 transition hover:bg-purple-100"
+                >
+                  <Lightbulb className="h-4 w-4" />
+                  Препоръчай групиране
+                </button>
+                <button
+                  onClick={() => setShowCreatePairing(true)}
+                  className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+                >
+                  <Plus className="h-4 w-4" />
+                  Ръчно
+                </button>
+              </div>
             </div>
 
             {pairings.length === 0 ? (
@@ -1261,13 +1689,22 @@ export default function ApexMonitor() {
                 <p className="mt-1 text-sm text-slate-400 max-w-xs">
                   Комбинирайте два или повече акаунта и проследявайте прогреса към целите $3,000 → $2,600
                 </p>
-                <button
-                  onClick={() => setShowCreatePairing(true)}
-                  className="mt-5 flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
-                >
-                  <Plus className="h-4 w-4" />
-                  Създай първата комбинация
-                </button>
+                <div className="mt-5 flex gap-2">
+                  <button
+                    onClick={() => setShowSuggest(true)}
+                    className="flex items-center gap-2 rounded-xl border border-purple-200 bg-purple-50 px-4 py-2.5 text-sm font-semibold text-purple-700 transition hover:bg-purple-100"
+                  >
+                    <Lightbulb className="h-4 w-4" />
+                    Препоръчай групиране
+                  </button>
+                  <button
+                    onClick={() => setShowCreatePairing(true)}
+                    className="flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Ръчно
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
@@ -1302,6 +1739,16 @@ export default function ApexMonitor() {
             autoRefresh={autoRefresh} setAutoRefresh={setAutoRefresh}
             onSave={() => { setShowSettings(false); fetchAccounts(); }}
             onClose={() => setShowSettings(false)}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showSuggest && (
+          <SuggestPairingsModal
+            accounts={accounts}
+            onCreatePairing={handleCreateFromSuggestion}
+            onCreateAll={handleCreateAllFromSplit}
+            onClose={() => setShowSuggest(false)}
           />
         )}
       </AnimatePresence>
