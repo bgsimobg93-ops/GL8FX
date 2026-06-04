@@ -13,6 +13,7 @@ import {
   Video,
   Building2,
   Activity,
+  LogOut,
 } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -118,8 +119,8 @@ export default function GL8FXTrainingPortal() {
       <section className="relative overflow-hidden bg-[radial-gradient(circle_at_top_right,_rgba(250,204,21,0.18),_transparent_28%),linear-gradient(135deg,#020617,#0f172a,#1e293b)] text-white">
         <div className="absolute inset-0 opacity-20 bg-[linear-gradient(to_right,rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.06)_1px,transparent_1px)] bg-[size:44px_44px]" />
 
-        {/* Apex Monitor link */}
-        <div className="relative flex justify-end px-6 pt-4">
+        {/* Top bar */}
+        <div className="relative flex items-center justify-between px-6 pt-4">
           <Link
             href="/apex-monitor"
             className="flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium backdrop-blur transition hover:bg-white/15"
@@ -127,6 +128,13 @@ export default function GL8FXTrainingPortal() {
             <Activity className="h-4 w-4 text-yellow-400" />
             Apex Monitor
           </Link>
+          <button
+            onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }}
+            className="flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium backdrop-blur text-slate-300 transition hover:bg-red-500/20 hover:text-red-300"
+          >
+            <LogOut className="h-4 w-4" />
+            Изход
+          </button>
         </div>
 
         <div className="relative mx-auto max-w-7xl px-6 py-12 md:py-20">

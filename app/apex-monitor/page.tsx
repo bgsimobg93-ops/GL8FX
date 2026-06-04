@@ -15,6 +15,7 @@ import {
   EyeOff,
   Layers,
   Lightbulb,
+  LogOut,
   Plus,
   RefreshCw,
   Settings,
@@ -1529,6 +1530,13 @@ export default function ApexMonitor() {
             <button onClick={() => setShowSettings(true)}
               className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm transition hover:bg-slate-50">
               <Settings className="h-4 w-4" />
+            </button>
+            <button
+              onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+              title="Изход"
+            >
+              <LogOut className="h-4 w-4" />
             </button>
           </div>
         </div>
