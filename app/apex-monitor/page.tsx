@@ -1647,6 +1647,13 @@ export default function ApexMonitor() {
               </span>
             )}
           </button>
+          <Link
+            href="/apex-monitor/auto"
+            className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold transition text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+          >
+            <Activity className="h-4 w-4" />
+            Автоматизация
+          </Link>
         </div>
 
         {/* Accounts tab */}
