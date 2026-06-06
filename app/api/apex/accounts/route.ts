@@ -33,86 +33,74 @@ function generateHistory(startBalance: number, days: number, seed: number): Bala
   return history;
 }
 
-const DEMO_ACCOUNTS = [
-  {
-    id: "ATF-48291",
-    traderName: "Ivan Petrov",
-    accountSize: 100000,
-    balance: 102450,
-    startingBalance: 100000,
-    dailyPnL: 820,
-    dailyLossLimit: -2000,
-    maxTrailingDrawdown: 97000,
-    status: "active",
-    lastUpdated: new Date().toISOString(),
-    balanceHistory: generateHistory(100000, 21, 0x4a3f),
-  },
-  {
-    id: "ATF-51847",
-    traderName: "Maria Georgieva",
-    accountSize: 50000,
-    balance: 51890,
-    startingBalance: 50000,
-    dailyPnL: -340,
-    dailyLossLimit: -1000,
-    maxTrailingDrawdown: 48000,
-    status: "active",
-    lastUpdated: new Date().toISOString(),
-    balanceHistory: generateHistory(50000, 21, 0xd3c1),
-  },
-  {
-    id: "ATF-39012",
-    traderName: "Georgi Stoyanov",
-    accountSize: 150000,
-    balance: 162800,
-    startingBalance: 150000,
-    dailyPnL: 1540,
-    dailyLossLimit: -3000,
-    maxTrailingDrawdown: 145500,
-    status: "passed",
-    lastUpdated: new Date().toISOString(),
-    balanceHistory: generateHistory(150000, 21, 0x82b5),
-  },
-  {
-    id: "ATF-62341",
-    traderName: "Elena Ivanova",
-    accountSize: 50000,
-    balance: 48100,
-    startingBalance: 50000,
-    dailyPnL: -890,
-    dailyLossLimit: -1000,
-    maxTrailingDrawdown: 47500,
-    status: "active",
-    lastUpdated: new Date().toISOString(),
-    balanceHistory: generateHistory(50000, 21, 0x1f7a),
-  },
-  {
-    id: "ATF-77853",
-    traderName: "Dimitar Nikolov",
-    accountSize: 25000,
-    balance: 23450,
-    startingBalance: 25000,
-    dailyPnL: -380,
-    dailyLossLimit: -500,
-    maxTrailingDrawdown: 23500,
-    status: "active",
-    lastUpdated: new Date().toISOString(),
-    balanceHistory: generateHistory(25000, 21, 0x6e92),
-  },
-  {
-    id: "ATF-88420",
-    traderName: "Petya Krasteva",
-    accountSize: 100000,
-    balance: 97200,
-    startingBalance: 100000,
-    dailyPnL: -200,
-    dailyLossLimit: -2000,
-    maxTrailingDrawdown: 97000,
-    status: "failed",
-    lastUpdated: new Date().toISOString(),
-    balanceHistory: generateHistory(100000, 21, 0x3b08),
-  },
+const FIRST_NAMES = [
+  "Ivan", "Maria", "Georgi", "Elena", "Dimitar", "Petya", "Nikolay", "Desislava",
+  "Stoyan", "Galina", "Hristo", "Yana", "Aleksandar", "Viktoria", "Boris", "Tsvetelina",
+  "Kaloyan", "Radost", "Martin", "Iva", "Plamen", "Silvia", "Todor", "Nadezhda",
+  "Emil", "Kristina", "Valentin", "Mariana", "Stefan", "Daniela",
 ];
+const LAST_NAMES = [
+  "Petrov", "Georgieva", "Stoyanov", "Ivanova", "Nikolov", "Krasteva", "Dimitrov",
+  "Angelova", "Todorov", "Marinova", "Hristov", "Koleva", "Vasilev", "Popova",
+  "Iliev", "Stefanova", "Mihaylov", "Dimova", "Yordanov", "Petkova",
+];
+
+const SIZES = [25000, 50000, 100000, 150000];
+
+function generateDemoAccounts() {
+  const base = 0x9e3779b1;
+  return Array.from({ length: 100 }, (_, idx) => {
+    const i = idx + 1;
+    const seed = Math.imul(i, 0x27d4eb2f) ^ base;
+    let s = seed >>> 0;
+    const rand = () => {
+      s = Math.imul(s ^ (s >>> 16), 0x45d9f3b);
+      s = Math.imul(s ^ (s >>> 16), 0x45d9f3b);
+      s ^= s >>> 16;
+      return (s >>> 0) / 0xffffffff;
+    };
+
+    const accountSize = SIZES[Math.floor(rand() * SIZES.length)];
+    const dailyLossLimit = -Math.round(accountSize * 0.02); // 2% daily loss limit
+
+    // Daily P&L: mostly small swings, a few big winners / drawdown hits
+    const roll = rand();
+    let dailyPnL: number;
+    if (roll < 0.14) {
+      // hit daily drawdown
+      dailyPnL = -(Math.abs(dailyLossLimit) + Math.round(rand() * accountSize * 0.01));
+    } else {
+      dailyPnL = Math.round((rand() - 0.4) * accountSize * 0.035);
+    }
+
+    const balance = accountSize + Math.round((rand() - 0.35) * accountSize * 0.08);
+    const maxTrailingDrawdown = Math.round(accountSize * (0.94 + rand() * 0.03));
+
+    let status: "active" | "passed" | "failed" | "pending";
+    const sRoll = rand();
+    if (balance < maxTrailingDrawdown) status = "failed";
+    else if (sRoll < 0.12) status = "passed";
+    else if (sRoll < 0.18) status = "failed";
+    else if (sRoll < 0.22) status = "pending";
+    else status = "active";
+
+    return {
+      id: `ATF-${String(10000 + i * 137).slice(-5)}`,
+      traderName: `${FIRST_NAMES[idx % FIRST_NAMES.length]} ${LAST_NAMES[idx % LAST_NAMES.length]}`,
+      accountSize,
+      balance,
+      startingBalance: accountSize,
+      dailyPnL,
+      dailyLossLimit,
+      maxTrailingDrawdown,
+      status,
+      lastUpdated: new Date().toISOString(),
+      balanceHistory: generateHistory(accountSize, 21, seed),
+    };
+  });
+}
+
+const DEMO_ACCOUNTS = generateDemoAccounts();
 
 export async function GET(request: NextRequest) {
   const apiKey = request.headers.get("X-Apex-Key");
