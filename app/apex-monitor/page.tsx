@@ -1654,6 +1654,13 @@ export default function ApexMonitor() {
             <Activity className="h-4 w-4" />
             Автоматизация
           </Link>
+          <Link
+            href="/apex-monitor/accounts"
+            className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold transition bg-slate-900 text-white hover:bg-slate-700"
+          >
+            <Users className="h-4 w-4" />
+            Реални акаунти
+          </Link>
         </div>
 
         {/* Accounts tab */}
