@@ -324,9 +324,16 @@ function NewSessionModal({
   const [name, setName] = useState("");
   const [err, setErr] = useState("");
 
-  const accA = accounts.filter((a) => a.groupId === groupA);
-  const accB = accounts.filter((a) => a.groupId === groupB);
+  const accA = [...accounts.filter((a) => a.groupId === groupA)].sort((a, b) => b.currentBalance - a.currentBalance);
+  const accB = [...accounts.filter((a) => a.groupId === groupB)].sort((a, b) => b.currentBalance - a.currentBalance);
   const pairCount = Math.min(accA.length, accB.length);
+
+  // Suggested pairs sorted by balance — preview
+  const suggestedPairs = Array.from({ length: pairCount }, (_, i) => ({
+    a: accA[i],
+    b: accB[i],
+    diff: Math.abs(accA[i].currentBalance - accB[i].currentBalance),
+  }));
 
   const handle = () => {
     if (!groupA) { setErr("Изберете Група A"); return; }
@@ -368,11 +375,36 @@ function NewSessionModal({
             </select>
           </div>
           {pairCount > 0 && (
-            <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-700">
-              <strong>{pairCount} двойки</strong> ще бъдат създадени (по ред на добавяне)
-              {Math.abs(accA.length - accB.length) > 0 && (
-                <span className="ml-1 text-amber-600">· {Math.abs(accA.length - accB.length)} нечифтени</span>
-              )}
+            <div className="rounded-[16px] border border-slate-200 bg-slate-50 overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 bg-white">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  Предложени двойки по баланс
+                </span>
+                <span className="text-xs text-slate-400">{pairCount} двойки
+                  {Math.abs(accA.length - accB.length) > 0 && (
+                    <span className="ml-1 text-amber-600">· {Math.abs(accA.length - accB.length)} без двойка</span>
+                  )}
+                </span>
+              </div>
+              <div className="max-h-48 overflow-y-auto divide-y divide-slate-100">
+                {suggestedPairs.map((p, i) => (
+                  <div key={i} className="flex items-center gap-2 px-4 py-2 text-xs">
+                    <span className="w-4 text-center font-mono text-slate-400">#{i + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <span className="font-mono font-bold text-slate-600">{p.a.id}</span>
+                      <span className="ml-1 text-slate-400">{fmt(p.a.currentBalance)}</span>
+                    </div>
+                    <span className="text-slate-300">×</span>
+                    <div className="flex-1 min-w-0 text-right">
+                      <span className="font-mono font-bold text-slate-600">{p.b.id}</span>
+                      <span className="ml-1 text-slate-400">{fmt(p.b.currentBalance)}</span>
+                    </div>
+                    <span className={`w-20 text-right font-semibold ${p.diff === 0 ? "text-emerald-600" : p.diff < 500 ? "text-emerald-500" : p.diff < 2000 ? "text-amber-600" : "text-red-500"}`}>
+                      Δ {fmt(p.diff)}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           <div>
@@ -461,8 +493,9 @@ export default function AccountsPage() {
 
   // ── Trade handlers ──
   const startSession = (groupAId: string, groupBId: string, name: string) => {
-    const accA = accounts.filter((a) => a.groupId === groupAId);
-    const accB = accounts.filter((a) => a.groupId === groupBId);
+    // Sort both groups by balance descending so closest balances are paired
+    const accA = [...accounts.filter((a) => a.groupId === groupAId)].sort((a, b) => b.currentBalance - a.currentBalance);
+    const accB = [...accounts.filter((a) => a.groupId === groupBId)].sort((a, b) => b.currentBalance - a.currentBalance);
     const count = Math.min(accA.length, accB.length);
     const pairs: TradePair[] = Array.from({ length: count }, (_, i) => ({
       id: uid(),
@@ -939,6 +972,7 @@ export default function AccountsPage() {
                                 const isDone = pair.status === "completed";
                                 const pnlA = isDone && pair.endBalanceA != null ? pair.endBalanceA - pair.startBalanceA : null;
                                 const pnlB = isDone && pair.endBalanceB != null ? pair.endBalanceB - pair.startBalanceB : null;
+                                const balDiff = Math.abs(pair.startBalanceA - pair.startBalanceB);
 
                                 return (
                                   <div key={pair.id}
@@ -957,7 +991,18 @@ export default function AccountsPage() {
                                       )}
                                     </div>
 
-                                    <div className="text-slate-300 text-lg font-light">×</div>
+                                    {/* Balance diff badge */}
+                                    <div className="flex flex-col items-center gap-1 shrink-0">
+                                      <span className="text-slate-300 text-base font-light">×</span>
+                                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                        balDiff === 0 ? "bg-emerald-100 text-emerald-600"
+                                        : balDiff < 500 ? "bg-emerald-50 text-emerald-500"
+                                        : balDiff < 2000 ? "bg-amber-50 text-amber-600"
+                                        : "bg-red-50 text-red-500"
+                                      }`}>
+                                        Δ {fmt(balDiff)}
+                                      </span>
+                                    </div>
 
                                     {/* Account B */}
                                     <div className="flex-1 min-w-0">
