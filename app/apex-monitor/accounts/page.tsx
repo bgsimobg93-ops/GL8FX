@@ -7,7 +7,7 @@ import {
   ArrowLeft, Plus, Trash2, Edit2, Save, X, Users, Layers,
   Activity, LogOut, CheckCircle, TrendingUp, TrendingDown,
   ArrowRight, AlertTriangle, History, ChevronDown, ChevronUp,
-  RefreshCw, Zap, Circle,
+  RefreshCw, Zap, Circle, ListPlus,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -425,6 +425,177 @@ function NewSessionModal({
   );
 }
 
+// ─── Bulk Generate Modal ──────────────────────────────────────────────────────
+
+function BulkGenerateModal({
+  groups,
+  existingIds,
+  onGenerate,
+  onClose,
+}: {
+  groups: Group[];
+  existingIds: Set<string>;
+  onGenerate: (accs: RealAccount[]) => void;
+  onClose: () => void;
+}) {
+  const [prefix, setPrefix] = useState("APEX");
+  const [startNum, setStartNum] = useState("591805");
+  const [endNum, setEndNum] = useState("622963");
+  const [step, setStep] = useState("1");
+  const [suffix, setSuffix] = useState("40");
+  const [size, setSize] = useState<number>(50000);
+  const [balance, setBalance] = useState("50000");
+  const [namePrefix, setNamePrefix] = useState("Trader");
+  const [groupId, setGroupId] = useState("");
+  const [err, setErr] = useState("");
+
+  // Build preview
+  const preview = useMemo(() => {
+    const s = parseInt(startNum, 10);
+    const e = parseInt(endNum, 10);
+    const st = parseInt(step, 10);
+    if (isNaN(s) || isNaN(e) || isNaN(st) || st <= 0 || e < s) return [];
+    const list: { id: string; n: number }[] = [];
+    for (let n = s; n <= e && list.length < 5000; n += st) {
+      list.push({ id: `${prefix}-${n}-${suffix}`, n });
+    }
+    return list;
+  }, [prefix, startNum, endNum, step, suffix]);
+
+  const dupes = preview.filter((p) => existingIds.has(p.id)).length;
+  const newCount = preview.length - dupes;
+
+  const handle = () => {
+    if (preview.length === 0) { setErr("Невалиден диапазон — проверете начало/край/стъпка"); return; }
+    if (preview.length > 2000) { setErr("Прекалено много акаунти (макс. 2000). Намалете диапазона или увеличете стъпката."); return; }
+    const bal = parseFloat(balance);
+    if (isNaN(bal) || bal <= 0) { setErr("Невалиден баланс"); return; }
+    const now = new Date().toISOString();
+    const accs: RealAccount[] = preview
+      .filter((p) => !existingIds.has(p.id))
+      .map((p, i) => ({
+        id: p.id,
+        traderName: `${namePrefix} ${i + 1}`,
+        accountSize: size,
+        startingBalance: size,
+        currentBalance: bal,
+        groupId: groupId || null,
+        createdAt: now,
+      }));
+    onGenerate(accs);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="w-full max-w-lg rounded-[24px] border border-slate-200 bg-white p-6 shadow-2xl"
+      >
+        <div className="mb-5 flex items-center justify-between">
+          <h2 className="text-lg font-bold">Генерирай поредица акаунти</h2>
+          <button onClick={onClose} className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 transition"><X className="h-4 w-4" /></button>
+        </div>
+
+        <div className="mb-4 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-xs text-slate-500">
+          Форматът е <strong className="font-mono text-slate-700">ПРЕФИКС-ЧИСЛО-СУФИКС</strong>. Числото расте от началото до края със зададената стъпка.
+        </div>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Префикс</label>
+              <input value={prefix} onChange={(e) => setPrefix(e.target.value.toUpperCase())}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono focus:border-slate-400 focus:outline-none" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Суфикс</label>
+              <input value={suffix} onChange={(e) => setSuffix(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono focus:border-slate-400 focus:outline-none" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Начало</label>
+              <input value={startNum} onChange={(e) => setStartNum(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono focus:border-slate-400 focus:outline-none" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Край</label>
+              <input value={endNum} onChange={(e) => setEndNum(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono focus:border-slate-400 focus:outline-none" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Стъпка</label>
+              <input value={step} onChange={(e) => setStep(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono focus:border-slate-400 focus:outline-none" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Размер</label>
+              <select value={size} onChange={(e) => { const v = Number(e.target.value); setSize(v); setBalance(String(v)); }}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none">
+                {SIZES.map((s) => <option key={s} value={s}>{fmt(s)}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Баланс ($)</label>
+              <input type="number" value={balance} onChange={(e) => setBalance(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono focus:border-slate-400 focus:outline-none" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Име на трейдър</label>
+              <input value={namePrefix} onChange={(e) => setNamePrefix(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Група</label>
+              <select value={groupId} onChange={(e) => setGroupId(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-slate-400 focus:outline-none">
+                <option value="">— без група —</option>
+                {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {preview.length > 0 && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-600">
+                  <strong className="text-emerald-600">{newCount}</strong> нови акаунта
+                  {dupes > 0 && <span className="ml-1 text-amber-600">· {dupes} вече съществуват (пропуснати)</span>}
+                </span>
+                <span className="font-mono text-xs text-slate-400">{preview.length} общо</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-mono text-slate-500">
+                <span className="rounded bg-white border border-slate-200 px-2 py-0.5">{preview[0].id}</span>
+                {preview.length > 2 && <span className="text-slate-400">…</span>}
+                {preview.length > 1 && <span className="rounded bg-white border border-slate-200 px-2 py-0.5">{preview[preview.length - 1].id}</span>}
+              </div>
+            </div>
+          )}
+
+          {err && <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-600">{err}</div>}
+
+          <div className="flex gap-2 pt-1">
+            <button onClick={onClose} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50">Откажи</button>
+            <button onClick={handle} disabled={newCount === 0}
+              className="flex-1 rounded-xl bg-slate-900 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50">
+              <ListPlus className="mr-1.5 inline h-4 w-4" />Създай {newCount > 0 ? newCount : ""}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 type Tab = "accounts" | "groups" | "trading" | "history";
@@ -440,6 +611,7 @@ export default function AccountsPage() {
   const [editAccount, setEditAccount] = useState<RealAccount | null | true>(null);
   const [endPair, setEndPair] = useState<{ sessionId: string; pairId: string } | null>(null);
   const [newSession, setNewSession] = useState(false);
+  const [bulkGen, setBulkGen] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
 
   // Groups panel expand
@@ -473,6 +645,12 @@ export default function AccountsPage() {
   };
   const deleteAccount = (id: string) => {
     saveAccounts(accounts.filter((a) => a.id !== id));
+  };
+  const bulkAddAccounts = (accs: RealAccount[]) => {
+    const ids = new Set(accounts.map((a) => a.id));
+    const fresh = accs.filter((a) => !ids.has(a.id));
+    saveAccounts([...accounts, ...fresh]);
+    setBulkGen(false);
   };
 
   // ── Group handlers ──
@@ -649,12 +827,20 @@ export default function AccountsPage() {
                 <h2 className="text-xl font-bold">Реални акаунти</h2>
                 <p className="text-sm text-slate-500">Добавете всеки Apex Trader Funding акаунт ръчно</p>
               </div>
-              <button
-                onClick={() => setEditAccount(true)}
-                className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
-              >
-                <Plus className="h-4 w-4" />Добави акаунт
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setBulkGen(true)}
+                  className="flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <ListPlus className="h-4 w-4" />Поредица
+                </button>
+                <button
+                  onClick={() => setEditAccount(true)}
+                  className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
+                >
+                  <Plus className="h-4 w-4" />Добави акаунт
+                </button>
+              </div>
             </div>
 
             {accounts.length === 0 ? (
@@ -1179,6 +1365,15 @@ export default function AccountsPage() {
             accounts={accounts}
             onStart={startSession}
             onClose={() => setNewSession(false)}
+          />
+        )}
+        {bulkGen && (
+          <BulkGenerateModal
+            key="bulk-modal"
+            groups={groups}
+            existingIds={new Set(accounts.map((a) => a.id))}
+            onGenerate={bulkAddAccounts}
+            onClose={() => setBulkGen(false)}
           />
         )}
       </AnimatePresence>
